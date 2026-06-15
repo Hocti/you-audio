@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -16,17 +18,28 @@ class _PlayTabState extends State<PlayTab> {
   List<SubtitleEntry> _subtitles = [];
   bool _loadingSubtitles = false;
   String? _lastLoadedYoutubeId;
+  double _currentSpeed = 1.0;
+  StreamSubscription<dynamic>? _mediaItemSub;
 
   @override
   void initState() {
     super.initState();
     _tryLoadSubtitles();
+    if (AudioManager.isInitialized) {
+      _currentSpeed = AudioManager.handler.player.speed;
+    }
     // Listen for track changes
     if (AudioManager.isInitialized) {
-      AudioManager.handler.mediaItem.listen((_) {
+      _mediaItemSub = AudioManager.handler.mediaItem.listen((_) {
         if (mounted) _tryLoadSubtitles();
       });
     }
+  }
+
+  @override
+  void dispose() {
+    _mediaItemSub?.cancel();
+    super.dispose();
   }
 
   Future<void> _tryLoadSubtitles() async {
@@ -127,39 +140,25 @@ class _PlayTabState extends State<PlayTab> {
             children: [
               // Speed control
               Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Text('Speed:',
-                        style: Theme.of(context).textTheme.bodyMedium),
+                    Text('Speed:', style: Theme.of(context).textTheme.bodyMedium),
                     const SizedBox(width: 8),
-                    StreamBuilder<PlayerState>(
-                      stream: player.playerStateStream,
-                      builder: (_, __) {
-                        final currentSpeed = player.speed;
-                        // Find closest step
-                        final stepSpeed = AudioPlayerHandler.speedSteps
-                            .reduce((a, b) =>
-                                (a - currentSpeed).abs() <
-                                        (b - currentSpeed).abs()
-                                    ? a
-                                    : b);
-                        return DropdownButton<double>(
-                          value: stepSpeed,
-                          items: AudioPlayerHandler.speedSteps
-                              .map((s) => DropdownMenuItem(
-                                    value: s,
-                                    child: Text('${s}x'),
-                                  ))
-                              .toList(),
-                          onChanged: (v) {
-                            if (v != null) handler.setSpeed(v);
-                          },
-                          underline: const SizedBox.shrink(),
-                        );
+                    DropdownButton<double>(
+                      value: AudioPlayerHandler.speedSteps.reduce((a, b) =>
+                          (a - _currentSpeed).abs() < (b - _currentSpeed).abs() ? a : b),
+                      items: AudioPlayerHandler.speedSteps
+                          .map((s) => DropdownMenuItem(value: s, child: Text('${s}x')))
+                          .toList(),
+                      onChanged: (v) {
+                        if (v != null) {
+                          AudioManager.handler.setSpeed(v);
+                          setState(() => _currentSpeed = v);
+                        }
                       },
+                      underline: const SizedBox.shrink(),
                     ),
                   ],
                 ),
