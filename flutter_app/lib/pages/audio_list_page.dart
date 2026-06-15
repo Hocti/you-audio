@@ -40,9 +40,9 @@ class _AudioListPageState extends State<AudioListPage> {
       final prefs = await SharedPreferences.getInstance();
       final progressMap = <String, int>{};
       for (final v in videos) {
-        final pos = prefs.getInt('progress_${v.id}');
+        final pos = prefs.getInt('progress_${v.youtubeId}');
         if (pos != null) {
-          progressMap[v.id] = pos;
+          progressMap[v.youtubeId] = pos;
         }
       }
 
@@ -185,9 +185,9 @@ class _AudioListPageState extends State<AudioListPage> {
         padding: const EdgeInsets.only(bottom: 8),
         itemBuilder: (context, index) {
           final video = _videos[index];
-          final progress = _progressMap[video.id];
+          final progress = _progressMap[video.youtubeId];
           final isPlaying = AudioManager.isInitialized &&
-              AudioManager.handler.currentVideo?.id == video.id;
+              AudioManager.handler.currentVideo?.youtubeId == video.youtubeId;
 
           return ListTile(
             contentPadding:
@@ -198,7 +198,7 @@ class _AudioListPageState extends State<AudioListPage> {
                 width: 80,
                 height: 56,
                 child: CachedNetworkImage(
-                  imageUrl: _apiService.getThumbnailUrl(video.id),
+                  imageUrl: _apiService.thumbnailUrl(video.youtubeId),
                   fit: BoxFit.cover,
                   placeholder: (_, __) => Container(
                     color: Theme.of(context).colorScheme.surfaceContainerHighest,

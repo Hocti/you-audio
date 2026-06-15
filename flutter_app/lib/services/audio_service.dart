@@ -24,7 +24,7 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
     // Save position periodically
     _player.positionStream.listen((position) {
       if (_currentVideo != null && position.inSeconds > 0) {
-        _savePosition(_currentVideo!.id, position.inSeconds);
+        _savePosition(_currentVideo!.youtubeId, position.inSeconds);
       }
     });
   }
@@ -39,20 +39,20 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
 
   Future<void> playVideo(Video video) async {
     _currentVideo = video;
-    final url = '$_serverUrl/api/audio/${video.id}';
+    final url = '$_serverUrl/api/audio/${video.youtubeId}';
 
     mediaItem.add(MediaItem(
-      id: video.id,
+      id: video.youtubeId,
       title: video.title,
       artist: video.channel,
       duration: Duration(seconds: video.duration),
-      artUri: Uri.parse('$_serverUrl/api/thumbnail/${video.id}'),
+      artUri: Uri.parse('$_serverUrl/api/thumbnail/${video.youtubeId}'),
     ));
 
     await _player.setUrl(url);
 
     // Restore saved position
-    final savedPos = await _getSavedPosition(video.id);
+    final savedPos = await _getSavedPosition(video.youtubeId);
     if (savedPos > 0 && savedPos < video.duration - 5) {
       await _player.seek(Duration(seconds: savedPos));
     }
@@ -63,7 +63,7 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
   Future<void> _onTrackCompleted() async {
     if (_currentVideo != null) {
       // Mark as completed by saving position = 0 (reset)
-      await _savePosition(_currentVideo!.id, 0);
+      await _savePosition(_currentVideo!.youtubeId, 0);
     }
     // Auto-play next unplayed track
     await playNextUnplayed();
@@ -74,8 +74,8 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
     final prefs = await SharedPreferences.getInstance();
 
     for (final video in _playlist) {
-      if (video.id == _currentVideo?.id) continue;
-      final pos = prefs.getInt('progress_${video.id}') ?? -1;
+      if (video.youtubeId == _currentVideo?.youtubeId) continue;
+      final pos = prefs.getInt('progress_${video.youtubeId}') ?? -1;
       // -1 means never played, pick this one
       if (pos == -1) {
         await playVideo(video);
@@ -85,7 +85,7 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
 
     // If all have been started, pick first one that isn't current
     for (final video in _playlist) {
-      if (video.id != _currentVideo?.id) {
+      if (video.youtubeId != _currentVideo?.youtubeId) {
         await playVideo(video);
         return;
       }
@@ -109,7 +109,7 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
   Future<void> pause() async {
     if (_currentVideo != null) {
       await _savePosition(
-        _currentVideo!.id,
+        _currentVideo!.youtubeId,
         _player.position.inSeconds,
       );
     }
@@ -120,7 +120,7 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
   Future<void> stop() async {
     if (_currentVideo != null) {
       await _savePosition(
-        _currentVideo!.id,
+        _currentVideo!.youtubeId,
         _player.position.inSeconds,
       );
     }

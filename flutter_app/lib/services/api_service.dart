@@ -4,49 +4,70 @@ import '../models/video.dart';
 
 class ApiService {
   final String serverUrl;
+  final String accessToken;
 
-  ApiService(this.serverUrl);
+  ApiService(this.serverUrl, {this.accessToken = ''});
 
-  String get _baseUrl => serverUrl.endsWith('/') ? serverUrl.substring(0, serverUrl.length - 1) : serverUrl;
+  String get _base => serverUrl.endsWith('/')
+      ? serverUrl.substring(0, serverUrl.length - 1)
+      : serverUrl;
+
+  Map<String, String> get _headers => {
+        'Content-Type': 'application/json',
+        if (accessToken.isNotEmpty) 'X-Access-Token': accessToken,
+      };
 
   Future<Map<String, dynamic>> startDownload(String youtubeUrl) async {
-    final response = await http.post(
-      Uri.parse('$_baseUrl/api/download'),
-      headers: {'Content-Type': 'application/json'},
+    final resp = await http.post(
+      Uri.parse('$_base/api/download'),
+      headers: _headers,
       body: jsonEncode({'url': youtubeUrl}),
     );
-    if (response.statusCode == 200) {
-      return jsonDecode(response.body);
-    }
-    throw Exception('Download request failed: ${response.statusCode}');
+    if (resp.statusCode == 200) return jsonDecode(resp.body) as Map<String, dynamic>;
+    throw Exception('Download failed: ${resp.statusCode}');
   }
 
   Future<Map<String, dynamic>> getProgress(String taskId) async {
-    final response = await http.get(
-      Uri.parse('$_baseUrl/api/progress/$taskId'),
+    final resp = await http.get(
+      Uri.parse('$_base/api/progress/$taskId'),
+      headers: _headers,
     );
-    if (response.statusCode == 200) {
-      return jsonDecode(response.body);
-    }
-    throw Exception('Progress request failed: ${response.statusCode}');
+    if (resp.statusCode == 200) return jsonDecode(resp.body) as Map<String, dynamic>;
+    throw Exception('Progress failed: ${resp.statusCode}');
   }
 
   Future<List<Video>> getVideos() async {
-    final response = await http.get(
-      Uri.parse('$_baseUrl/api/videos'),
+    final resp = await http.get(
+      Uri.parse('$_base/api/videos'),
+      headers: _headers,
     );
-    if (response.statusCode == 200) {
-      final List<dynamic> data = jsonDecode(response.body);
-      return data.map((json) => Video.fromJson(json)).toList();
+    if (resp.statusCode == 200) {
+      final body = jsonDecode(resp.body) as Map<String, dynamic>;
+      final list = body['videos'] as List<dynamic>;
+      return list.map((j) => Video.fromJson(j as Map<String, dynamic>)).toList();
     }
-    throw Exception('Failed to fetch videos: ${response.statusCode}');
+    throw Exception('getVideos failed: ${resp.statusCode}');
   }
 
-  String getAudioUrl(String videoId) {
-    return '$_baseUrl/api/audio/$videoId';
+  Future<void> deleteVideo(String youtubeId) async {
+    final resp = await http.delete(
+      Uri.parse('$_base/api/videos/$youtubeId'),
+      headers: _headers,
+    );
+    if (resp.statusCode != 204) {
+      throw Exception('Delete failed: ${resp.statusCode}');
+    }
   }
 
-  String getThumbnailUrl(String videoId) {
-    return '$_baseUrl/api/thumbnail/$videoId';
+  Future<String> getSubtitleText(String youtubeId) async {
+    final resp = await http.get(
+      Uri.parse('$_base/api/subtitles/$youtubeId'),
+      headers: _headers,
+    );
+    if (resp.statusCode == 200) return resp.body;
+    throw Exception('No subtitles: ${resp.statusCode}');
   }
+
+  String audioUrl(String youtubeId) => '$_base/api/audio/$youtubeId';
+  String thumbnailUrl(String youtubeId) => '$_base/api/thumbnail/$youtubeId';
 }
