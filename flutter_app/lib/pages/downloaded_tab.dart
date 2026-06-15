@@ -4,20 +4,18 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/video.dart';
 import '../services/api_service.dart';
 import '../services/audio_service.dart';
-import '../widgets/player_bar.dart';
 
-class AudioListPage extends StatefulWidget {
-  final String serverUrl;
-  final String accessToken;
+class DownloadedTab extends StatefulWidget {
+  final ApiService api;
+  final VoidCallback onPlayTap;
 
-  const AudioListPage({super.key, required this.serverUrl, this.accessToken = ''});
+  const DownloadedTab({super.key, required this.api, required this.onPlayTap});
 
   @override
-  State<AudioListPage> createState() => _AudioListPageState();
+  State<DownloadedTab> createState() => _DownloadedTabState();
 }
 
-class _AudioListPageState extends State<AudioListPage> {
-  late final ApiService _apiService;
+class _DownloadedTabState extends State<DownloadedTab> {
   List<Video> _videos = [];
   Map<String, int> _progressMap = {};
   bool _loading = true;
@@ -26,46 +24,31 @@ class _AudioListPageState extends State<AudioListPage> {
   @override
   void initState() {
     super.initState();
-    _apiService = ApiService(widget.serverUrl, accessToken: widget.accessToken);
     _loadVideos();
   }
 
   Future<void> _loadVideos() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-
+    setState(() { _loading = true; _error = null; });
     try {
-      final videos = await _apiService.getVideos();
+      final videos = await widget.api.getVideos();
       final prefs = await SharedPreferences.getInstance();
       final progressMap = <String, int>{};
       for (final v in videos) {
         final pos = prefs.getInt('progress_${v.youtubeId}');
-        if (pos != null) {
-          progressMap[v.youtubeId] = pos;
-        }
+        if (pos != null) progressMap[v.youtubeId] = pos;
       }
-
       if (mounted) {
         setState(() {
           _videos = videos;
           _progressMap = progressMap;
           _loading = false;
         });
-
-        // Update playlist in audio handler
         if (AudioManager.isInitialized) {
           AudioManager.handler.setPlaylist(videos);
         }
       }
     } catch (e) {
-      if (mounted) {
-        setState(() {
-          _error = e.toString();
-          _loading = false;
-        });
-      }
+      if (mounted) setState(() { _error = e.toString(); _loading = false; });
     }
   }
 
@@ -73,6 +56,7 @@ class _AudioListPageState extends State<AudioListPage> {
     final handler = AudioManager.handler;
     handler.setPlaylist(_videos);
     await handler.playVideo(video);
+    widget.onPlayTap();
     if (mounted) setState(() {});
   }
 
@@ -91,7 +75,7 @@ class _AudioListPageState extends State<AudioListPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Audio Library'),
+        title: const Text('Downloaded'),
         centerTitle: true,
         actions: [
           IconButton(
@@ -101,21 +85,12 @@ class _AudioListPageState extends State<AudioListPage> {
           ),
         ],
       ),
-      body: Column(
-        children: [
-          Expanded(
-            child: _buildContent(),
-          ),
-          const PlayerBar(),
-        ],
-      ),
+      body: _buildContent(),
     );
   }
 
   Widget _buildContent() {
-    if (_loading) {
-      return const Center(child: CircularProgressIndicator());
-    }
+    if (_loading) return const Center(child: CircularProgressIndicator());
 
     if (_error != null) {
       return Center(
@@ -124,22 +99,14 @@ class _AudioListPageState extends State<AudioListPage> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(
-                Icons.error_outline,
-                size: 48,
-                color: Theme.of(context).colorScheme.error,
-              ),
+              Icon(Icons.error_outline, size: 48,
+                  color: Theme.of(context).colorScheme.error),
               const SizedBox(height: 16),
-              Text(
-                'Failed to load videos',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
+              Text('Failed to load videos',
+                  style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: 8),
-              Text(
-                _error!,
-                style: Theme.of(context).textTheme.bodySmall,
-                textAlign: TextAlign.center,
-              ),
+              Text(_error!, style: Theme.of(context).textTheme.bodySmall,
+                  textAlign: TextAlign.center),
               const SizedBox(height: 16),
               FilledButton.icon(
                 onPressed: _loadVideos,
@@ -157,23 +124,15 @@ class _AudioListPageState extends State<AudioListPage> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              Icons.library_music_outlined,
-              size: 64,
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
+            Icon(Icons.library_music_outlined, size: 64,
+                color: Theme.of(context).colorScheme.onSurfaceVariant),
             const SizedBox(height: 16),
-            Text(
-              'No audio files yet',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
+            Text('No audio files yet',
+                style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 8),
-            Text(
-              'Download some YouTube videos first',
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
-            ),
+            Text('Download some YouTube videos first',
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant)),
           ],
         ),
       );
@@ -196,10 +155,9 @@ class _AudioListPageState extends State<AudioListPage> {
             leading: ClipRRect(
               borderRadius: BorderRadius.circular(8),
               child: SizedBox(
-                width: 80,
-                height: 56,
+                width: 80, height: 56,
                 child: CachedNetworkImage(
-                  imageUrl: _apiService.thumbnailUrl(video.youtubeId),
+                  imageUrl: widget.api.thumbnailUrl(video.youtubeId),
                   fit: BoxFit.cover,
                   placeholder: (_, __) => Container(
                     color: Theme.of(context).colorScheme.surfaceContainerHighest,
@@ -212,57 +170,37 @@ class _AudioListPageState extends State<AudioListPage> {
                 ),
               ),
             ),
-            title: Text(
-              video.title,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: isPlaying
-                    ? Theme.of(context).colorScheme.primary
-                    : null,
-                fontWeight: isPlaying ? FontWeight.bold : null,
-              ),
-            ),
+            title: Text(video.title, maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: isPlaying ? Theme.of(context).colorScheme.primary : null,
+                  fontWeight: isPlaying ? FontWeight.bold : null,
+                )),
             subtitle: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  video.channel,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
+                Text(video.channel, maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall),
                 const SizedBox(height: 2),
                 Row(
                   children: [
-                    Text(
-                      video.durationFormatted,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: Theme.of(context)
-                                .colorScheme
-                                .onSurfaceVariant,
-                          ),
-                    ),
+                    Text(video.durationFormatted,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: Theme.of(context).colorScheme.onSurfaceVariant)),
                     if (progress != null) ...[
                       const SizedBox(width: 8),
-                      Text(
-                        _formatProgress(progress, video.duration),
-                        style:
-                            Theme.of(context).textTheme.bodySmall?.copyWith(
-                                  color:
-                                      Theme.of(context).colorScheme.primary,
-                                ),
-                      ),
+                      Text(_formatProgress(progress, video.duration),
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                color: Theme.of(context).colorScheme.primary)),
                     ],
                   ],
                 ),
               ],
             ),
             trailing: isPlaying
-                ? Icon(
-                    Icons.equalizer,
-                    color: Theme.of(context).colorScheme.primary,
-                  )
+                ? Icon(Icons.equalizer,
+                    color: Theme.of(context).colorScheme.primary)
                 : const Icon(Icons.play_arrow),
             onTap: () => _playVideo(video),
           );

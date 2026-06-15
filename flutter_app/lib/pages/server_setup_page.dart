@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'download_page.dart';
+import 'main_scaffold.dart';
 
 class ServerSetupPage extends StatefulWidget {
   const ServerSetupPage({super.key});
@@ -29,7 +29,10 @@ class _ServerSetupPageState extends State<ServerSetupPage> {
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
-          builder: (_) => DownloadPage(serverUrl: savedUrl, accessToken: savedToken),
+          builder: (_) => MainScaffold(
+            serverUrl: savedUrl,
+            accessToken: savedToken,
+          ),
         ),
       );
     } else {
@@ -55,7 +58,10 @@ class _ServerSetupPageState extends State<ServerSetupPage> {
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
-          builder: (_) => DownloadPage(serverUrl: url, accessToken: token),
+          builder: (_) => MainScaffold(
+            serverUrl: url,
+            accessToken: token,
+          ),
         ),
       );
     }
