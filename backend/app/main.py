@@ -9,7 +9,7 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from sqlalchemy import select
@@ -36,6 +36,13 @@ from .schemas import (
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+_ACCESS_TOKEN = os.getenv("ACCESS_TOKEN", "")
+
+
+async def _verify_token(x_access_token: str | None = Header(default=None)) -> None:
+    if _ACCESS_TOKEN and x_access_token != _ACCESS_TOKEN:
+        raise HTTPException(status_code=401, detail="Invalid access token")
 
 
 # ---------------------------------------------------------------------------
@@ -74,7 +81,11 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 
 @app.post("/api/download", response_model=DownloadResponse)
-async def download(body: DownloadRequest, session: AsyncSession = Depends(get_session)):
+async def download(
+    body: DownloadRequest,
+    session: AsyncSession = Depends(get_session),
+    _: None = Depends(_verify_token),
+):
     video_id = extract_video_id(body.url)
     if not video_id:
         raise HTTPException(status_code=400, detail="Invalid YouTube URL")
@@ -126,7 +137,7 @@ async def download(body: DownloadRequest, session: AsyncSession = Depends(get_se
 # ---------------------------------------------------------------------------
 
 @app.get("/api/progress/{task_id}", response_model=ProgressResponse)
-async def get_task_progress(task_id: str):
+async def get_task_progress(task_id: str, _: None = Depends(_verify_token)):
     tp = get_progress(task_id)
     if tp is None:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -143,7 +154,11 @@ async def get_task_progress(task_id: str):
 # ---------------------------------------------------------------------------
 
 @app.get("/api/audio/{video_id}")
-async def serve_audio(video_id: str, session: AsyncSession = Depends(get_session)):
+async def serve_audio(
+    video_id: str,
+    session: AsyncSession = Depends(get_session),
+    _: None = Depends(_verify_token),
+):
     stmt = select(Video).where(Video.youtube_id == video_id, Video.status == "done")
     row: Video | None = (await session.execute(stmt)).scalar_one_or_none()
     if not row or not row.mp3_path:
@@ -166,7 +181,11 @@ async def serve_audio(video_id: str, session: AsyncSession = Depends(get_session
 # ---------------------------------------------------------------------------
 
 @app.get("/api/thumbnail/{video_id}")
-async def serve_thumbnail(video_id: str, session: AsyncSession = Depends(get_session)):
+async def serve_thumbnail(
+    video_id: str,
+    session: AsyncSession = Depends(get_session),
+    _: None = Depends(_verify_token),
+):
     stmt = select(Video).where(Video.youtube_id == video_id)
     row: Video | None = (await session.execute(stmt)).scalar_one_or_none()
     if not row or not row.thumbnail_path:
@@ -184,13 +203,63 @@ async def serve_thumbnail(video_id: str, session: AsyncSession = Depends(get_ses
 # ---------------------------------------------------------------------------
 
 @app.get("/api/videos", response_model=VideoListResponse)
-async def list_videos(session: AsyncSession = Depends(get_session)):
+async def list_videos(
+    session: AsyncSession = Depends(get_session),
+    _: None = Depends(_verify_token),
+):
     stmt = select(Video).order_by(Video.created_at.desc())
     rows = (await session.execute(stmt)).scalars().all()
     return VideoListResponse(
         videos=[VideoOut.model_validate(r) for r in rows],
         total=len(rows),
     )
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/videos/{youtube_id}
+# ---------------------------------------------------------------------------
+
+@app.delete("/api/videos/{youtube_id}", status_code=204)
+async def delete_video(
+    youtube_id: str,
+    session: AsyncSession = Depends(get_session),
+    _: None = Depends(_verify_token),
+):
+    stmt = select(Video).where(Video.youtube_id == youtube_id)
+    row: Video | None = (await session.execute(stmt)).scalar_one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    for path_attr in (row.mp3_path, row.thumbnail_path, row.subtitle_path):
+        if path_attr:
+            p = Path(path_attr)
+            if p.exists():
+                p.unlink()
+
+    await session.delete(row)
+    await session.commit()
+
+
+# ---------------------------------------------------------------------------
+# GET /api/subtitles/{youtube_id}
+# ---------------------------------------------------------------------------
+
+@app.get("/api/subtitles/{youtube_id}")
+async def serve_subtitles(
+    youtube_id: str,
+    session: AsyncSession = Depends(get_session),
+    _: None = Depends(_verify_token),
+):
+    stmt = select(Video).where(Video.youtube_id == youtube_id)
+    row: Video | None = (await session.execute(stmt)).scalar_one_or_none()
+    if not row or not row.subtitle_path:
+        raise HTTPException(status_code=404, detail="Subtitles not found")
+
+    path = Path(row.subtitle_path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Subtitle file missing from disk")
+
+    return FileResponse(path=path, media_type="text/vtt")
 
 
 # ---------------------------------------------------------------------------

@@ -24,6 +24,7 @@ services:
     environment:
       DATABASE_URL: "postgresql+asyncpg://ytaudio:ytaudio@db:5432/ytaudio"
       DATA_DIR: "/data"
+      ACCESS_TOKEN: ""
     volumes:
       - ytdata:/data
     depends_on:
