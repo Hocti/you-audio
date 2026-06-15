@@ -166,8 +166,8 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
 
   @override
   Future<void> skipToNext() async {
-    // 15-second forward jump
-    final newPos = _player.position + const Duration(seconds: 15);
+    // 30-second forward jump
+    final newPos = _player.position + const Duration(seconds: 30);
     final dur = _player.duration ?? Duration.zero;
     if (newPos < dur) {
       await _player.seek(newPos);
@@ -178,8 +178,8 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
 
   @override
   Future<void> skipToPrevious() async {
-    // 15-second backward jump
-    final newPos = _player.position - const Duration(seconds: 15);
+    // 30-second backward jump
+    final newPos = _player.position - const Duration(seconds: 30);
     if (newPos > Duration.zero) {
       await _player.seek(newPos);
     } else {

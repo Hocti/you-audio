@@ -135,12 +135,12 @@ class PlayerBar extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(width: 8),
-                      // -15s
+                      // -30s
                       IconButton(
-                        icon: const Icon(Icons.replay_10),
+                        icon: const Icon(Icons.replay_30),
                         iconSize: 28,
                         onPressed: () => handler.skipToPrevious(),
-                        tooltip: 'Back 15s',
+                        tooltip: 'Back 30s',
                       ),
                       // Play/Pause
                       IconButton(
@@ -159,12 +159,12 @@ class PlayerBar extends StatelessWidget {
                           }
                         },
                       ),
-                      // +15s
+                      // +30s
                       IconButton(
-                        icon: const Icon(Icons.forward_10),
+                        icon: const Icon(Icons.forward_30),
                         iconSize: 28,
                         onPressed: () => handler.skipToNext(),
-                        tooltip: 'Forward 15s',
+                        tooltip: 'Forward 30s',
                       ),
                       // Next track
                       IconButton(
