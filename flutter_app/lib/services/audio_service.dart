@@ -9,9 +9,14 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
   Video? _currentVideo;
   List<Video> _playlist = [];
   String _serverUrl = '';
+  Video? _queuedNext;
 
   AudioPlayer get player => _player;
   Video? get currentVideo => _currentVideo;
+
+  void queueNext(Video video) {
+    _queuedNext = video;
+  }
 
   AudioPlayerHandler() {
     _player.playbackEventStream.map(_transformEvent).pipe(playbackState);
@@ -22,9 +27,14 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
     });
 
     // Save position periodically
-    _player.positionStream.listen((position) {
+    _player.positionStream.listen((position) async {
       if (_currentVideo != null && position.inSeconds > 0) {
         _savePosition(_currentVideo!.youtubeId, position.inSeconds);
+        final dur = _currentVideo!.duration;
+        if (dur > 0 && position.inSeconds / dur >= 0.95) {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setBool('completed_${_currentVideo!.youtubeId}', true);
+        }
       }
     });
   }
@@ -39,6 +49,8 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
 
   Future<void> playVideo(Video video) async {
     _currentVideo = video;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('opened_${video.youtubeId}', true);
     final url = '$_serverUrl/api/audio/${video.youtubeId}';
 
     mediaItem.add(MediaItem(
@@ -62,7 +74,8 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
 
   Future<void> _onTrackCompleted() async {
     if (_currentVideo != null) {
-      // Mark as completed by saving position = 0 (reset)
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('completed_${_currentVideo!.youtubeId}', true);
       await _savePosition(_currentVideo!.youtubeId, 0);
     }
     // Auto-play next unplayed track
@@ -70,20 +83,37 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
   }
 
   Future<void> playNextUnplayed() async {
+    if (_queuedNext != null) {
+      final next = _queuedNext!;
+      _queuedNext = null;
+      await playVideo(next);
+      return;
+    }
     if (_playlist.isEmpty) return;
     final prefs = await SharedPreferences.getInstance();
 
+    // First pass: find unstarted (never played) and not completed
     for (final video in _playlist) {
       if (video.youtubeId == _currentVideo?.youtubeId) continue;
       final pos = prefs.getInt('progress_${video.youtubeId}') ?? -1;
-      // -1 means never played, pick this one
-      if (pos == -1) {
+      final completed = prefs.getBool('completed_${video.youtubeId}') ?? false;
+      if (pos == -1 && !completed) {
         await playVideo(video);
         return;
       }
     }
 
-    // If all have been started, pick first one that isn't current
+    // Second pass: in-progress but not completed
+    for (final video in _playlist) {
+      if (video.youtubeId == _currentVideo?.youtubeId) continue;
+      final completed = prefs.getBool('completed_${video.youtubeId}') ?? false;
+      if (!completed) {
+        await playVideo(video);
+        return;
+      }
+    }
+
+    // All done — pick first non-current
     for (final video in _playlist) {
       if (video.youtubeId != _currentVideo?.youtubeId) {
         await playVideo(video);
