@@ -21,6 +21,8 @@ from .models import Video
 
 logger = logging.getLogger(__name__)
 
+_SUBTITLE_LANGS = ["zh", "zh-Hant", "zh-Hans", "zh-TW", "zh-HK", "zh-CN", "en"]
+
 DATA_DIR = Path(os.getenv("DATA_DIR", "/data"))
 AUDIO_DIR = DATA_DIR / "audio"
 THUMB_DIR = DATA_DIR / "thumbnails"
@@ -124,10 +126,6 @@ def _sync_download(youtube_id: str, task_id: str) -> dict[str, Any]:
         "no_warnings": True,
         "noplaylist": True,
         "overwrites": True,
-        "writesubtitles": True,
-        "writeautomaticsub": True,
-        "subtitleslangs": ["zh", "zh-Hant", "zh-Hans", "zh-TW", "zh-HK", "zh-CN", "en"],
-        "subtitlesformat": "vtt",
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -138,10 +136,30 @@ def _sync_download(youtube_id: str, task_id: str) -> dict[str, Any]:
     mp3_path = AUDIO_DIR / f"{youtube_id}.mp3"
     file_size = mp3_path.stat().st_size if mp3_path.exists() else None
 
+    # Subtitle download in a separate call so failures don't abort the main job
+    subtitle_opts: dict[str, Any] = {
+        "skip_download": True,
+        "writesubtitles": True,
+        "writeautomaticsub": True,
+        "subtitleslangs": _SUBTITLE_LANGS,
+        "subtitlesformat": "vtt",
+        "outtmpl": output_template,
+        "ignoreerrors": True,
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+    }
+    try:
+        with yt_dlp.YoutubeDL(subtitle_opts) as ydl_sub:
+            ydl_sub.extract_info(
+                f"https://www.youtube.com/watch?v={youtube_id}", download=True
+            )
+    except Exception:
+        logger.debug("Subtitle download failed for %s (ignored)", youtube_id)
+
     # Find subtitle file (prefer Chinese, fallback to English)
-    subtitle_langs = ["zh", "zh-Hant", "zh-Hans", "zh-TW", "zh-HK", "zh-CN", "en"]
     subtitle_path: str | None = None
-    for lang in subtitle_langs:
+    for lang in _SUBTITLE_LANGS:
         candidate = AUDIO_DIR / f"{youtube_id}.{lang}.vtt"
         if candidate.exists():
             subtitle_path = str(candidate)
