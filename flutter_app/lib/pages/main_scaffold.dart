@@ -53,21 +53,24 @@ class _MainScaffoldState extends State<MainScaffold> {
         index: _currentIndex,
         children: tabs,
       ),
-      bottomNavigationBar: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const PlayerBar(),
-          NavigationBar(
-            selectedIndex: _currentIndex,
-            onDestinationSelected: (i) => setState(() => _currentIndex = i),
-            destinations: const [
-              NavigationDestination(icon: Icon(Icons.link), label: 'Link'),
-              NavigationDestination(icon: Icon(Icons.subscriptions), label: 'Channel'),
-              NavigationDestination(icon: Icon(Icons.library_music), label: 'Downloaded'),
-              NavigationDestination(icon: Icon(Icons.play_circle), label: 'Play'),
-            ],
-          ),
-        ],
+      bottomNavigationBar: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const PlayerBar(),
+            NavigationBar(
+              selectedIndex: _currentIndex,
+              onDestinationSelected: (i) => setState(() => _currentIndex = i),
+              destinations: const [
+                NavigationDestination(icon: Icon(Icons.link), label: 'Link'),
+                NavigationDestination(icon: Icon(Icons.subscriptions), label: 'Channel'),
+                NavigationDestination(icon: Icon(Icons.library_music), label: 'Downloaded'),
+                NavigationDestination(icon: Icon(Icons.play_circle), label: 'Play'),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

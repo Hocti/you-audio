@@ -32,11 +32,9 @@ class PlayerBar extends StatelessWidget {
               ),
             ],
           ),
-          child: SafeArea(
-            top: false,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
                 // Progress bar
                 StreamBuilder<Duration>(
                   stream: player.positionStream,
