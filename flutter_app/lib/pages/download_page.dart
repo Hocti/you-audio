@@ -9,8 +9,9 @@ import 'server_setup_page.dart';
 
 class DownloadPage extends StatefulWidget {
   final String serverUrl;
+  final String accessToken;
 
-  const DownloadPage({super.key, required this.serverUrl});
+  const DownloadPage({super.key, required this.serverUrl, this.accessToken = ''});
 
   @override
   State<DownloadPage> createState() => _DownloadPageState();
@@ -27,7 +28,7 @@ class _DownloadPageState extends State<DownloadPage> {
   @override
   void initState() {
     super.initState();
-    _apiService = ApiService(widget.serverUrl);
+    _apiService = ApiService(widget.serverUrl, accessToken: widget.accessToken);
     _initAudio();
   }
 
@@ -124,7 +125,7 @@ class _DownloadPageState extends State<DownloadPage> {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => AudioListPage(serverUrl: widget.serverUrl),
+        builder: (_) => AudioListPage(serverUrl: widget.serverUrl, accessToken: widget.accessToken),
       ),
     );
   }

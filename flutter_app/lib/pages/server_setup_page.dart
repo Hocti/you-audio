@@ -11,6 +11,7 @@ class ServerSetupPage extends StatefulWidget {
 
 class _ServerSetupPageState extends State<ServerSetupPage> {
   final _controller = TextEditingController();
+  final _tokenController = TextEditingController();
   bool _loading = true;
 
   @override
@@ -22,11 +23,13 @@ class _ServerSetupPageState extends State<ServerSetupPage> {
   Future<void> _checkSavedUrl() async {
     final prefs = await SharedPreferences.getInstance();
     final savedUrl = prefs.getString('server_url');
+    final savedToken = prefs.getString('access_token') ?? '';
+    _tokenController.text = savedToken;
     if (savedUrl != null && savedUrl.isNotEmpty && mounted) {
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
-          builder: (_) => DownloadPage(serverUrl: savedUrl),
+          builder: (_) => DownloadPage(serverUrl: savedUrl, accessToken: savedToken),
         ),
       );
     } else {
@@ -43,14 +46,16 @@ class _ServerSetupPageState extends State<ServerSetupPage> {
       return;
     }
 
+    final token = _tokenController.text.trim();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('server_url', url);
+    await prefs.setString('access_token', token);
 
     if (mounted) {
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
-          builder: (_) => DownloadPage(serverUrl: url),
+          builder: (_) => DownloadPage(serverUrl: url, accessToken: token),
         ),
       );
     }
@@ -59,6 +64,7 @@ class _ServerSetupPageState extends State<ServerSetupPage> {
   @override
   void dispose() {
     _controller.dispose();
+    _tokenController.dispose();
     super.dispose();
   }
 
@@ -110,6 +116,20 @@ class _ServerSetupPageState extends State<ServerSetupPage> {
                 prefixIcon: const Icon(Icons.link),
               ),
               keyboardType: TextInputType.url,
+              onSubmitted: (_) => _save(),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _tokenController,
+              decoration: InputDecoration(
+                labelText: 'Access Token (optional)',
+                hintText: 'Leave empty if no auth is set',
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                prefixIcon: const Icon(Icons.lock_outline),
+              ),
+              obscureText: true,
               onSubmitted: (_) => _save(),
             ),
             const SizedBox(height: 24),

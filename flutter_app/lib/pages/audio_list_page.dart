@@ -8,8 +8,9 @@ import '../widgets/player_bar.dart';
 
 class AudioListPage extends StatefulWidget {
   final String serverUrl;
+  final String accessToken;
 
-  const AudioListPage({super.key, required this.serverUrl});
+  const AudioListPage({super.key, required this.serverUrl, this.accessToken = ''});
 
   @override
   State<AudioListPage> createState() => _AudioListPageState();
@@ -25,7 +26,7 @@ class _AudioListPageState extends State<AudioListPage> {
   @override
   void initState() {
     super.initState();
-    _apiService = ApiService(widget.serverUrl);
+    _apiService = ApiService(widget.serverUrl, accessToken: widget.accessToken);
     _loadVideos();
   }
 
