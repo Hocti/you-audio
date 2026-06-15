@@ -12,8 +12,17 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
   Video? _queuedNext;
   bool _markedCompleted = false;
 
+  static const List<double> speedSteps = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5];
+
   AudioPlayer get player => _player;
   Video? get currentVideo => _currentVideo;
+
+  double get currentSpeed => _player.speed;
+
+  @override
+  Future<void> setSpeed(double speed) async {
+    await _player.setSpeed(speed.clamp(0.5, 2.5));
+  }
 
   void queueNext(Video video) {
     _queuedNext = video;
