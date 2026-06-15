@@ -63,7 +63,7 @@ class _LinkTabState extends State<LinkTab> {
       try {
         final progress = await widget.api.getProgress(taskId);
         final status = progress['status']?.toString() ?? '';
-        final pct = (progress['progress'] as num?)?.toDouble() ?? 0;
+        final pct = (progress['progress_percent'] as num?)?.toDouble() ?? 0;
 
         if (!mounted) {
           timer.cancel();
