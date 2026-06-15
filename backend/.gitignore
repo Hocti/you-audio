@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+.env
+
+# Data (audio files and thumbnails are not tracked in git)
+data/
+
+# IDE
+.idea/
+.vscode/
+
+# macOS
+.DS_Store
+
+# Docker override files (may contain local secrets)
+docker-compose.override.yml
+
+# Logs
+*.log

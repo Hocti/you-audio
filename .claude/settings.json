@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cat ~/.bash_env)",
+      "Read(//home/hocti/**)",
+      "Bash(bash -l -c 'node -v')",
+      "Bash(bash -O extglob -c 'source ~/.bashrc && node -v')",
+      "Bash(bash -c 'source ~/.bashrc && echo \"NVM_DIR: $NVM_DIR\" && echo \"PATH: $PATH\" && node -v')",
+      "Bash(bash -c 'export BASH_ENV=/home/hocti/.bash_env && [ -f \"$BASH_ENV\" ] && source \"$BASH_ENV\" && node -v')",
+      "Bash(bash -i -c 'node -v')",
+      "Bash(bash -i -c 'source ~/.bash_env && node -v && echo \"Success: Node.js v24.12.0 is available\"')",
+      "Bash(GIT_DISCOVERY_ACROSS_FILESYSTEM=1 git -C /mnt/d/sync_dev/youtube-audio log --oneline -3)",
+      "Bash(git -C /mnt/d/sync_dev/youtube-audio log --oneline -3)",
+      "Bash(git -C /mnt/d/sync_dev/youtube-audio/backend log --oneline -3)",
+      "Bash(git -C /mnt/d/sync_dev/youtube-audio/flutter_app log --oneline -3)",
+      "Bash(GIT_DISCOVERY_ACROSS_FILESYSTEM=1 git -C /mnt/d/sync_dev/youtube-audio/backend log --oneline -3)",
+      "Bash(GIT_DISCOVERY_ACROSS_FILESYSTEM=1 git -C /mnt/d/sync_dev/youtube-audio/flutter_app log --oneline -3)",
+      "Bash(git commit *)"
+    ],
+    "additionalDirectories": [
+      "/home/hocti/.claude",
+      "/home/hocti"
+    ]
+  }
+}
