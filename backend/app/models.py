@@ -22,6 +22,7 @@ class Video(Base):
     duration: Mapped[int | None] = mapped_column(Integer, nullable=True)  # seconds
     thumbnail_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     thumbnail_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    subtitle_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     mp3_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     file_size: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     status: Mapped[str] = mapped_column(
