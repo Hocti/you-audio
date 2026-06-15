@@ -43,7 +43,7 @@ class ApiService {
     );
     if (resp.statusCode == 200) {
       final body = jsonDecode(resp.body) as Map<String, dynamic>;
-      final list = body['videos'] as List<dynamic>;
+      final list = (body['videos'] as List<dynamic>?) ?? const <dynamic>[];
       return list.map((j) => Video.fromJson(j as Map<String, dynamic>)).toList();
     }
     throw Exception('getVideos failed: ${resp.statusCode}');
@@ -54,7 +54,7 @@ class ApiService {
       Uri.parse('$_base/api/videos/$youtubeId'),
       headers: _headers,
     );
-    if (resp.statusCode != 204) {
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
       throw Exception('Delete failed: ${resp.statusCode}');
     }
   }

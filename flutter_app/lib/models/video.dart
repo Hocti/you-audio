@@ -3,7 +3,6 @@ class Video {
   final String title;
   final String channel;
   final int duration;       // seconds
-  final String? thumbnailUrl;
   final bool hasSubtitle;
 
   const Video({
@@ -11,7 +10,6 @@ class Video {
     required this.title,
     required this.channel,
     required this.duration,
-    this.thumbnailUrl,
     this.hasSubtitle = false,
   });
 
@@ -21,7 +19,6 @@ class Video {
       title: json['title'] as String? ?? 'Unknown',
       channel: json['channel_name'] as String? ?? 'Unknown',
       duration: json['duration'] as int? ?? 0,
-      thumbnailUrl: json['thumbnail_url'] as String?,
       hasSubtitle: json['has_subtitle'] as bool? ?? false,
     );
   }
