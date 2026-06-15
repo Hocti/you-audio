@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import datetime
 import uuid
+from pathlib import Path
 
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, model_validator
 
 
 # --- request ---
@@ -19,6 +20,8 @@ class VideoOut(BaseModel):
     channel_name: str | None = None
     duration: int | None = None
     thumbnail_url: str | None = None
+    has_subtitle: bool = False
+    subtitle_path: str | None = None
     mp3_path: str | None = None
     file_size: int | None = None
     status: str
@@ -26,6 +29,12 @@ class VideoOut(BaseModel):
     created_at: datetime.datetime
 
     model_config = {"from_attributes": True}
+
+    @model_validator(mode="after")
+    def compute_has_subtitle(self) -> "VideoOut":
+        if self.subtitle_path:
+            self.has_subtitle = Path(self.subtitle_path).exists()
+        return self
 
 
 class DownloadResponse(BaseModel):
