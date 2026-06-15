@@ -124,6 +124,10 @@ def _sync_download(youtube_id: str, task_id: str) -> dict[str, Any]:
         "no_warnings": True,
         "noplaylist": True,
         "overwrites": True,
+        "writesubtitles": True,
+        "writeautomaticsub": True,
+        "subtitleslangs": ["zh", "zh-Hant", "zh-Hans", "zh-TW", "zh-HK", "zh-CN", "en"],
+        "subtitlesformat": "vtt",
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -134,6 +138,15 @@ def _sync_download(youtube_id: str, task_id: str) -> dict[str, Any]:
     mp3_path = AUDIO_DIR / f"{youtube_id}.mp3"
     file_size = mp3_path.stat().st_size if mp3_path.exists() else None
 
+    # Find subtitle file (prefer Chinese, fallback to English)
+    subtitle_langs = ["zh", "zh-Hant", "zh-Hans", "zh-TW", "zh-HK", "zh-CN", "en"]
+    subtitle_path: str | None = None
+    for lang in subtitle_langs:
+        candidate = AUDIO_DIR / f"{youtube_id}.{lang}.vtt"
+        if candidate.exists():
+            subtitle_path = str(candidate)
+            break
+
     return {
         "title": info.get("title"),
         "channel_name": info.get("channel") or info.get("uploader"),
@@ -141,6 +154,7 @@ def _sync_download(youtube_id: str, task_id: str) -> dict[str, Any]:
         "thumbnail_url": info.get("thumbnail"),
         "mp3_path": str(mp3_path),
         "file_size": file_size,
+        "subtitle_path": subtitle_path,
     }
 
 
@@ -173,6 +187,7 @@ async def run_download(youtube_id: str, task_id: str, video_db_id: uuid.UUID) ->
                 row.duration = result["duration"]
                 row.thumbnail_url = result["thumbnail_url"]
                 row.thumbnail_path = thumb_path
+                row.subtitle_path = result.get("subtitle_path")
                 row.mp3_path = result["mp3_path"]
                 row.file_size = result["file_size"]
                 row.status = "done"
