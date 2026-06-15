@@ -230,14 +230,17 @@ async def delete_video(
     if not row:
         raise HTTPException(status_code=404, detail="Video not found")
 
-    for path_attr in (row.mp3_path, row.thumbnail_path, row.subtitle_path):
+    # Collect paths before deleting the row
+    paths_to_delete = [row.mp3_path, row.thumbnail_path, row.subtitle_path]
+
+    await session.delete(row)
+    await session.commit()
+
+    for path_attr in paths_to_delete:
         if path_attr:
             p = Path(path_attr)
             if p.exists():
                 p.unlink()
-
-    await session.delete(row)
-    await session.commit()
 
 
 # ---------------------------------------------------------------------------
