@@ -270,20 +270,34 @@ class _DownloadedTabState extends State<DownloadedTab> {
       );
     }
 
-    if (_videos.isEmpty) {
+    final displayVideos = _displayVideos;
+
+    if (displayVideos.isEmpty) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.library_music_outlined, size: 64,
-                color: Theme.of(context).colorScheme.onSurfaceVariant),
+            Icon(
+              _videos.isEmpty
+                  ? Icons.library_music_outlined
+                  : Icons.filter_list_off,
+              size: 64,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
             const SizedBox(height: 16),
-            Text('No audio files yet',
-                style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 8),
-            Text('Download some YouTube videos first',
+            Text(
+              _videos.isEmpty ? 'No audio files yet' : 'No results for this filter',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            if (_videos.isEmpty) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Download some YouTube videos first',
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant)),
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+              ),
+            ],
           ],
         ),
       );
@@ -292,10 +306,10 @@ class _DownloadedTabState extends State<DownloadedTab> {
     return RefreshIndicator(
       onRefresh: _loadVideos,
       child: ListView.builder(
-        itemCount: _displayVideos.length,
+        itemCount: displayVideos.length,
         padding: const EdgeInsets.only(bottom: 8),
         itemBuilder: (context, index) {
-          final video = _displayVideos[index];
+          final video = displayVideos[index];
           final progress = _progressMap[video.youtubeId];
           final isPlaying = AudioManager.isInitialized &&
               AudioManager.handler.currentVideo?.youtubeId == video.youtubeId;

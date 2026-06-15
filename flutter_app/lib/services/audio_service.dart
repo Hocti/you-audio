@@ -10,6 +10,7 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
   List<Video> _playlist = [];
   String _serverUrl = '';
   Video? _queuedNext;
+  bool _markedCompleted = false;
 
   AudioPlayer get player => _player;
   Video? get currentVideo => _currentVideo;
@@ -31,7 +32,8 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
       if (_currentVideo != null && position.inSeconds > 0) {
         _savePosition(_currentVideo!.youtubeId, position.inSeconds);
         final dur = _currentVideo!.duration;
-        if (dur > 0 && position.inSeconds / dur >= 0.95) {
+        if (dur > 0 && !_markedCompleted && position.inSeconds / dur >= 0.95) {
+          _markedCompleted = true;
           final prefs = await SharedPreferences.getInstance();
           await prefs.setBool('completed_${_currentVideo!.youtubeId}', true);
         }
@@ -49,6 +51,7 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
 
   Future<void> playVideo(Video video) async {
     _currentVideo = video;
+    _markedCompleted = false;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('opened_${video.youtubeId}', true);
     final url = '$_serverUrl/api/audio/${video.youtubeId}';
