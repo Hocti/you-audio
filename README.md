@@ -1,6 +1,6 @@
 # YouTube Audio
 
-A self-hosted YouTube audio downloader and player. The backend runs in Docker on a NAS or local machine and converts YouTube videos to MP3. The Flutter Android app streams audio in the background with playback controls, subtitle display, and a library of downloaded tracks.
+A self-hosted YouTube audio downloader and player. The backend runs in Docker on a NAS or local machine and converts YouTube videos to MP3. The Flutter Android app downloads those tracks (audio + thumbnail + subtitles) to the device and plays them locally in the background — with playback controls, subtitle display, and an offline library of downloaded tracks.
 
 ## Quick Start
 
@@ -33,9 +33,10 @@ youtube-audio/
 
 ## Features
 
-- Download YouTube videos as MP3 (audio only)
+- Download YouTube videos as MP3 (audio only) to the device for offline playback
 - Download subtitles (Chinese/English) automatically
-- 4-tab Android app: Link, Channel (coming soon), Downloaded, Play
+- 5-tab Android app: Download, Channel, Downloaded, Play, Settings
+- Browse a channel's latest videos by channel ID/URL, with bookmarks
 - Background playback with lock screen controls
 - ±30s skip, playback speed 0.5–2.5×
 - Subtitle display synced to playback with tap-to-seek

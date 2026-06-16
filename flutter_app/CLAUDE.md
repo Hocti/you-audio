@@ -8,10 +8,14 @@ This file explains the app structure so you can quickly find and change things.
 
 An Android audio player app that:
 1. Connects to the backend server (URL + optional access token saved on first launch).
-2. Lets the user paste a YouTube URL — the backend downloads it and the app shows progress.
-3. Shows a list of downloaded audio tracks with thumbnails, with filter/sort controls.
-4. Plays audio in the background with a persistent bottom player bar and subtitle display.
+2. Lets the user paste a YouTube URL — the backend converts it to MP3, then the app **downloads the mp3 + thumbnail + subtitle to the device** (`DownloadManager`).
+3. Shows a list of **locally downloaded** audio tracks with thumbnails, plus any in-progress downloads, with filter/sort controls. This list reads from the device only — no backend calls — so it works offline.
+4. Plays the **local audio file** in the background with a persistent bottom player bar and subtitle display.
 5. Saves and restores playback position across sessions, and tracks listen completion.
+
+**Architecture note:** playback is local-first. The backend is only contacted to
+(a) start/convert a download, (b) pull the finished files to the device, and
+(c) browse a channel's videos. Once downloaded, tracks play offline.
 
 ---
 
@@ -23,9 +27,14 @@ flutter_app/
 │   ├── main.dart                      # App entry point, MaterialApp setup
 │   ├── models/
 │   │   ├── video.dart                 # Video data model, JSON parsing
+│   │   ├── local_video.dart           # A track stored on-device (library.json entry)
+│   │   ├── channel_video.dart         # A video returned by the channel endpoint
 │   │   └── subtitle_entry.dart        # Parsed subtitle line (text + start/end time)
 │   ├── services/
 │   │   ├── api_service.dart           # All HTTP calls to the backend
+│   │   ├── local_library.dart         # On-device library: files + library.json index
+│   │   ├── download_manager.dart      # Orchestrates backend convert + pull-to-device
+│   │   ├── bookmark_service.dart      # Bookmarked channels (SharedPreferences) + URL→id
 │   │   └── audio_service.dart         # Background audio playback logic
 │   ├── pages/
 │   │   ├── server_setup_page.dart     # Setup screen: enter backend URL + access token
@@ -56,21 +65,25 @@ flutter_app/
 - Provides the `ApiService` and `AudioPlayerHandler` instances down the widget tree.
 
 ### Tab 1 — `link_tab.dart`
-- Calls `ApiService.startDownload(url)` → `POST /api/download`.
-- Polls `GET /api/progress/{task_id}` every 1 second using a `Timer.periodic`.
-- Stops polling when `status == "done"` or `status == "error"`.
-- If the server returns `cached: true`, shows "Already downloaded!" immediately.
+- Pastes a YouTube URL from the clipboard and hands it to `DownloadManager.instance.start(api, url)` (fire-and-forget).
+- Progress and errors appear as rows in the Downloaded tab (not here).
 
 ### Tab 2 — `channel_tab.dart`
-- Placeholder. Will eventually support YouTube OAuth login and subscribed-channel browsing.
+- Two views in one stateful widget:
+  - **Paste view**: a "Paste Channel" button that reads the clipboard. A bare/embedded `UC…` id is used directly (`extractChannelId`); anything else (a `/channel/` URL, `@handle` URL, `/user/`, `/c/`) is resolved to a channel id via `ApiService.resolveChannel()` → `GET /api/channel/resolve`. Below the button is a scrollable list of bookmarked channels (`BookmarkService`, SharedPreferences).
+  - **Detail view**: lists the channel's latest videos via `ApiService.getChannelVideos(channelId)`. Back button + a star toggle (AppBar action) to bookmark the channel.
+- Tapping a video acts by per-row state (`_RowState`): **none** → start a download; **downloading** → "already downloading"; **downloaded** → play it; **playing** → jump to the Play tab. Trailing icon reflects the state (download / spinner / download_done / equalizer / error). The list rebuilds from `DownloadManager.instance.jobs` so icons update live.
+- Channel thumbnails are direct YouTube CDN URLs, so they need no access token.
+- Not yet implemented: YouTube OAuth login / subscribed-channel browsing.
 
 ### Tab 3 — `downloaded_tab.dart`
-- Calls `ApiService.getVideos()` → `GET /api/videos`.
+- Reads the **local library** via `LocalLibrary.all()` (offline; no backend call) and listens to `DownloadManager.instance.jobs` to show in-progress download rows at the top.
+- Thumbnails load from local files (`Image.file`).
 - Filter chips: **All / Unlistened / Listened** (based on `completed_*` SharedPreferences keys).
 - Sort dropdown: by date, channel, or listen status.
-- Tap a track to play it; long-press for a context menu with **Play Next** and **Delete**.
+- Tap a track to play it (local file); long-press for a context menu with **Play Next** and **Delete from device**.
 - **Play Next** calls `audioHandler.queueNext(video)`.
-- **Delete** calls `ApiService.deleteVideo(youtubeId)` then refreshes the list.
+- **Delete from device** calls `LocalLibrary.remove(youtubeId)` (removes local files only; the backend copy is untouched).
 
 ### Tab 4 — `play_tab.dart`
 - Displays current track title, channel, seek bar, and speed control.
@@ -87,13 +100,13 @@ flutter_app/
 
 - **`AudioPlayerHandler`** — extends `BaseAudioHandler` from `audio_service` package.
   - Wraps a `just_audio` `AudioPlayer` instance.
-  - `playVideo(video)` — sets the audio URL, restores saved position, calls `play()`. Also sets `opened_*` flag in SharedPreferences.
-  - `skipToNext()` — jumps **forward 30 seconds** (not a track skip).
-  - `skipToPrevious()` — jumps **backward 30 seconds**.
-  - `queueNext(video)` — stores a video to play immediately after the current track ends, taking priority over `playNextUnplayed()`.
-  - `playNextUnplayed()` — finds the next track to play: first prefers never-started + not-completed, then in-progress but not-completed, then falls back to the first non-current track.
+  - `playVideo(video)` — plays the **local file** via `_player.setFilePath(LocalLibrary.audioPath(id))` (offline, no token needed), restores saved position, calls `play()`. Sets `opened_*` flag in SharedPreferences. Media-notification art uses the local thumbnail file (`Uri.file`) when present.
+  - `skipToNext()` / `skipToPrevious()` — **track navigation** (next/previous item in the playlist). `skipToPrevious` restarts the current track if >3s in. These back the notification + hardware/Bluetooth prev/next buttons.
+  - `fastForward()` / `rewind()` — **±30 second seek** (the in-app ±30s buttons and the notification rewind/fast-forward controls).
+  - `queueNext(video)` — stores a video to play immediately after the current track ends, taking priority over `playNextUnplayed()` (used for auto-advance on completion).
+  - `playNextUnplayed()` — smart auto-advance on track end: prefers never-started + not-completed, then in-progress but not-completed, then the first non-current track.
   - `speedSteps` — `const List<double>` of valid speed values: `[0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5]`.
-  - `setSpeed(speed)` — clamps to 0.5–2.5 and sets player speed.
+  - `setSpeed(speed)` — clamps to 0.5–2.5, sets player speed, and **persists it** (`playback_speed` in SharedPreferences). The saved speed is loaded at startup and re-applied in `playVideo` so every track uses the same speed.
   - Position is saved to SharedPreferences as `progress_{youtubeId}` (integer seconds) on every `positionStream` tick.
   - **Completion tracking**: when playback position reaches 95% of duration, `_markedCompleted` is set to `true` and `completed_{youtubeId}` is written to SharedPreferences. On track end (`ProcessingState.completed`), resets the saved position to 0 and calls `playNextUnplayed()`.
   - `_markedCompleted` — prevents writing the `completed_*` flag multiple times per playback session.
@@ -104,10 +117,31 @@ flutter_app/
 
 ### Media Notification
 - Configured in `AudioServiceConfig` inside `AudioManager.init()`.
-- The notification shows **Previous (−30s) / Play-Pause / Next (+30s)** controls.
+- The notification shows **Prev track / −30s / Play-Pause / +30s / Next track** controls (compact view: prev / play-pause / next).
 - Channel ID: `com.example.flutter_app.audio` — change this if you rename the app package.
 
 ---
+
+## Local Storage & Downloads
+
+### `LocalLibrary` (`lib/services/local_library.dart`)
+- Owns the on-device library under the app documents dir:
+  `library/audio/{id}.mp3`, `library/thumbs/{id}.jpg`, `library/subs/{id}.vtt`,
+  and `library/library.json` (the index of `LocalVideo` entries, newest first).
+- `ensureInitialized()` must be awaited before use (called at startup in
+  `main_scaffold._initAudio`). Path getters (`audioPath/thumbPath/subPath`) are
+  synchronous afterward, so the audio handler can resolve files without async.
+- `all()`, `contains(id)`, `get(id)`, `addEntry(localVideo)`, `remove(id)`
+  (deletes files too).
+
+### `DownloadManager` (`lib/services/download_manager.dart`)
+- Singleton (`DownloadManager.instance`). `start(api, url)`:
+  POST `/api/download` → poll `/api/progress` until backend `done` → pull
+  `/api/audio` (+ thumbnail + subtitle, with `X-Access-Token`) to local files →
+  `LocalLibrary.addEntry(...)` → remove the job.
+- Exposes `ValueNotifier<List<DownloadJob>> jobs` (`{id, youtubeId, title, stage,
+  percent, error}`); the Downloaded tab rebuilds from it. Failed jobs stay until
+  `dismiss(jobId)`. This is the only library-side code that touches the backend.
 
 ## API Service (`lib/services/api_service.dart`)
 
@@ -118,7 +152,13 @@ Constructor: `ApiService(serverUrl, {accessToken})`. All methods include `X-Acce
 | `startDownload(url)` | POST | `/api/download` |
 | `getProgress(taskId)` | GET | `/api/progress/{taskId}` |
 | `getVideos()` | GET | `/api/videos` |
-| `deleteVideo(youtubeId)` | DELETE | `/api/videos/{youtubeId}` |
+| `getVideoStatuses()` | GET | `/api/videos` (returns `youtube_id`→status map) |
+| `getVideoMeta(youtubeId)` | GET | `/api/videos` (single video, filtered) |
+| `getChannelVideos(channelId)` | GET | `/api/channel/{channelId}/videos` |
+| `resolveChannel(input)` | GET | `/api/channel/resolve?q=…` (URL/@handle → id) |
+| `downloadAudioBytes(youtubeId)` | GET | `/api/audio/{youtubeId}` (bytes, with token) |
+| `downloadThumbnailBytes(youtubeId)` | GET | `/api/thumbnail/{youtubeId}` (bytes, with token) |
+| `deleteVideo(youtubeId)` | DELETE | `/api/videos/{youtubeId}` (legacy; not used by the app) |
 | `getSubtitleText(youtubeId)` | GET | `/api/subtitles/{youtubeId}` |
 | `audioUrl(youtubeId)` | — | Returns full URL string |
 | `thumbnailUrl(youtubeId)` | — | Returns full URL string |
@@ -177,6 +217,7 @@ Shown at the bottom of tabs 1–3.
 - `android:usesCleartextTraffic="true"` — allows HTTP (not just HTTPS) connections. Required for connecting to the NAS over a local network without a certificate.
 - `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_MEDIA_PLAYBACK` — required for background audio on Android 14+.
 - The `AudioService` and `MediaButtonReceiver` entries are required by the `audio_service` package.
+- **`MainActivity` must extend `com.ryanheise.audioservice.AudioServiceActivity`** (see `MainActivity.kt`), not the plain `FlutterActivity`. Otherwise `AudioService.init()` throws `PlatformException("The Activity class declared in your AndroidManifest.xml is wrong…")` and playback silently never starts.
 
 ---
 

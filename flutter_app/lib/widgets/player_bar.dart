@@ -110,36 +110,42 @@ class PlayerBar extends StatelessWidget {
                     );
                   },
                 ),
+                // Title (scrolling)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Text(
+                        currentVideo.title,
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                              color: Theme.of(context).colorScheme.onSurface,
+                            ),
+                        maxLines: 1,
+                      ),
+                    ),
+                  ),
+                ),
                 // Controls row
                 Padding(
                   padding:
-                      const EdgeInsets.only(left: 12, right: 12, bottom: 8),
+                      const EdgeInsets.only(left: 4, right: 4, bottom: 8, top: 2),
                   child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                     children: [
-                      // Title (scrolling)
-                      Expanded(
-                        child: SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          child: Text(
-                            currentVideo.title,
-                            style: Theme.of(context)
-                                .textTheme
-                                .bodyMedium
-                                ?.copyWith(
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .onSurface,
-                                ),
-                            maxLines: 1,
-                          ),
-                        ),
+                      // Previous track
+                      IconButton(
+                        icon: const Icon(Icons.skip_previous),
+                        iconSize: 28,
+                        onPressed: () => handler.skipToPrevious(),
+                        tooltip: 'Previous track',
                       ),
-                      const SizedBox(width: 8),
                       // -30s
                       IconButton(
                         icon: const Icon(Icons.replay_30),
-                        iconSize: 28,
-                        onPressed: () => handler.skipToPrevious(),
+                        iconSize: 26,
+                        onPressed: () => handler.rewind(),
                         tooltip: 'Back 30s',
                       ),
                       // Play/Pause
@@ -162,15 +168,15 @@ class PlayerBar extends StatelessWidget {
                       // +30s
                       IconButton(
                         icon: const Icon(Icons.forward_30),
-                        iconSize: 28,
-                        onPressed: () => handler.skipToNext(),
+                        iconSize: 26,
+                        onPressed: () => handler.fastForward(),
                         tooltip: 'Forward 30s',
                       ),
                       // Next track
                       IconButton(
                         icon: const Icon(Icons.skip_next),
                         iconSize: 28,
-                        onPressed: () => handler.playNextUnplayed(),
+                        onPressed: () => handler.skipToNext(),
                         tooltip: 'Next track',
                       ),
                     ],
@@ -178,7 +184,6 @@ class PlayerBar extends StatelessWidget {
                 ),
               ],
             ),
-          ),
         );
       },
     );

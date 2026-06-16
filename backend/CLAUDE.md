@@ -43,6 +43,8 @@ backend/
 | GET | `/api/audio/{video_id}` | Stream the MP3 file |
 | GET | `/api/thumbnail/{video_id}` | Serve the thumbnail image |
 | GET | `/api/videos` | Return all downloaded videos as JSON |
+| GET | `/api/channel/resolve?q=…` | Resolve a channel ID from a URL / `@handle` / username / id |
+| GET | `/api/channel/{channel_id}/videos` | Return a channel's latest videos (≤50) via YouTube Data API, cached 1h |
 | GET | `/api/health` | Health check — returns `{"status": "ok"}` |
 
 `video_id` in the URL path always means the **YouTube video ID** (11-character string like `dQw4w9WgXcQ`), not the database UUID.
@@ -91,6 +93,7 @@ backend/
 |----------|---------|-------------|
 | `DATABASE_URL` | — | Required. PostgreSQL async URL, e.g. `postgresql+asyncpg://user:pass@host/db` |
 | `DATA_DIR` | `/data` | Directory to store audio and thumbnail files |
+| `YOUTUBE_API_KEY` | — | YouTube Data API v3 key, required for `/api/channel/{id}/videos` |
 
 ---
 

@@ -4,7 +4,12 @@ sqlalchemy[asyncio]==2.0.31
 asyncpg==0.29.0
 pydantic==2.7.4
 pydantic-settings==2.3.4
-yt-dlp==2024.5.27
+# yt-dlp must stay current — YouTube changes its URL signing every few months,
+# and a stale version causes HTTP 403 Forbidden on downloads. This is only the
+# build-time baseline; entrypoint.sh upgrades yt-dlp + yt-dlp-ejs to latest on
+# every container start. yt-dlp-ejs bundles the JS challenge solver used with bun.
+yt-dlp>=2026.6.9
+yt-dlp-ejs>=2026.6.9
 python-multipart==0.0.9
 aiofiles==24.1.0
 httpx==0.27.0

@@ -2,6 +2,7 @@
 
 # Run directly without Docker (requires Python 3.11+, ffmpeg, yt-dlp installed locally)
 run:
+	YOUTUBE_API_KEY=$$(grep -E '^YOUTUBE_API_KEY=' .env | cut -d= -f2-) \
 	DATABASE_URL=sqlite+aiosqlite:///./ytaudio.db \
 	DATA_DIR=./data \
 	uvicorn app.main:app --reload --host 0.0.0.0 --port 8000

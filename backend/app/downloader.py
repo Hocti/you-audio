@@ -126,6 +126,8 @@ def _sync_download(youtube_id: str, task_id: str) -> dict[str, Any]:
         "no_warnings": True,
         "noplaylist": True,
         "overwrites": True,
+        # Use bun to solve YouTube's JS challenges (solver bundled via yt-dlp-ejs).
+        "js_runtimes": {"bun": {}},
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -148,6 +150,7 @@ def _sync_download(youtube_id: str, task_id: str) -> dict[str, Any]:
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
+        "js_runtimes": {"bun": {}},
     }
     try:
         with yt_dlp.YoutubeDL(subtitle_opts) as ydl_sub:

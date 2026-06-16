@@ -53,3 +53,24 @@ class ProgressResponse(BaseModel):
 class VideoListResponse(BaseModel):
     videos: list[VideoOut]
     total: int
+
+
+# --- channel latest videos ---
+class ChannelVideoOut(BaseModel):
+    video_id: str
+    title: str | None = None
+    published_at: str | None = None
+    thumbnail_url: str | None = None
+    channel_name: str | None = None
+
+
+class ChannelVideosResponse(BaseModel):
+    channel_id: str
+    cached: bool
+    total: int
+    videos: list[ChannelVideoOut]
+
+
+class ChannelResolveResponse(BaseModel):
+    channel_id: str
+    channel_name: str | None = None

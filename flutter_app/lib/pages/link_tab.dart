@@ -1,6 +1,7 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../services/api_service.dart';
+import '../services/download_manager.dart';
 
 class LinkTab extends StatefulWidget {
   final ApiService api;
@@ -11,105 +12,35 @@ class LinkTab extends StatefulWidget {
 }
 
 class _LinkTabState extends State<LinkTab> {
-  final _urlController = TextEditingController();
   String _status = '';
-  bool _downloading = false;
-  double _progress = 0;
-  Timer? _pollTimer;
+  String _url = '';
 
-  Future<void> _startDownload() async {
-    final url = _urlController.text.trim();
-    if (url.isEmpty) return;
-
-    setState(() {
-      _downloading = true;
-      _status = 'Checking cache...';
-      _progress = 0;
-    });
-
-    try {
-      final result = await widget.api.startDownload(url);
-
-      if (result['cached'] == true) {
-        setState(() {
-          _status = 'Already downloaded!';
-          _downloading = false;
-          _progress = 1.0;
-        });
-        return;
-      }
-
-      final taskId = result['task_id']?.toString();
-      if (taskId == null) {
-        setState(() {
-          _status = 'Error: No task ID received';
-          _downloading = false;
-        });
-        return;
-      }
-
-      _pollProgress(taskId);
-    } catch (e) {
-      setState(() {
-        _status = 'Error: $e';
-        _downloading = false;
-      });
+  Future<void> _pasteAndDownload() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final url = data?.text?.trim() ?? '';
+    if (url.isEmpty) {
+      setState(() => _status = 'Clipboard is empty');
+      return;
     }
-  }
-
-  void _pollProgress(String taskId) {
-    _pollTimer?.cancel();
-    _pollTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
-      try {
-        final progress = await widget.api.getProgress(taskId);
-        final status = progress['status']?.toString() ?? '';
-        final pct = (progress['progress_percent'] as num?)?.toDouble() ?? 0;
-
-        if (!mounted) {
-          timer.cancel();
-          return;
-        }
-
-        setState(() {
-          _progress = pct / 100;
-          switch (status) {
-            case 'downloading':
-              _status = 'Downloading... ${pct.toStringAsFixed(0)}%';
-              break;
-            case 'converting':
-              _status = 'Converting...';
-              break;
-            case 'done':
-            case 'completed':
-              _status = 'Done!';
-              _downloading = false;
-              timer.cancel();
-              _progress = 1.0;
-              break;
-            case 'error':
-              _status = 'Error: ${progress['error'] ?? 'Unknown error'}';
-              _downloading = false;
-              timer.cancel();
-              break;
-            default:
-              _status = status;
-          }
-        });
-      } catch (_) {
-        // Keep polling on transient errors
-      }
+    if (!url.contains('youtu')) {
+      setState(() {
+        _url = url;
+        _status = "That doesn't look like a YouTube URL";
+      });
+      return;
+    }
+    setState(() {
+      _url = url;
+      _status = 'Download started — track progress in the Downloaded tab.';
     });
-  }
-
-  @override
-  void dispose() {
-    _pollTimer?.cancel();
-    _urlController.dispose();
-    super.dispose();
+    // Fire-and-forget: the backend converts, then the app pulls the file to the
+    // device. Progress and any errors show up as rows in the Downloaded tab.
+    DownloadManager.instance.start(widget.api, url);
   }
 
   @override
   Widget build(BuildContext context) {
+    final isError = _status.startsWith('That') || _status == 'Clipboard is empty';
     return Scaffold(
       appBar: AppBar(title: const Text('Download'), centerTitle: true),
       body: Padding(
@@ -119,52 +50,51 @@ class _LinkTabState extends State<LinkTab> {
           children: [
             Icon(Icons.download_rounded, size: 64,
                 color: Theme.of(context).colorScheme.primary),
-            const SizedBox(height: 24),
-            TextField(
-              controller: _urlController,
-              decoration: InputDecoration(
-                labelText: 'YouTube URL',
-                hintText: 'https://youtube.com/watch?v=...',
-                border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12)),
-                prefixIcon: const Icon(Icons.link),
-                suffixIcon: IconButton(
-                  icon: const Icon(Icons.send),
-                  onPressed: _downloading ? null : _startDownload,
-                ),
-              ),
-              keyboardType: TextInputType.url,
-              onSubmitted: (_) {
-                if (!_downloading) _startDownload();
-              },
+            const SizedBox(height: 16),
+            Text(
+              'Copy a YouTube link, then tap Paste & Download',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+              textAlign: TextAlign.center,
             ),
             const SizedBox(height: 24),
-            if (_status.isNotEmpty) ...[
-              if (_downloading)
-                LinearProgressIndicator(
-                  value: _progress > 0 ? _progress : null,
-                  borderRadius: BorderRadius.circular(4),
+            FilledButton.icon(
+              onPressed: _pasteAndDownload,
+              icon: const Icon(Icons.content_paste),
+              label: const Text('Paste & Download'),
+              style: FilledButton.styleFrom(
+                minimumSize: const Size(double.infinity, 52),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
                 ),
+              ),
+            ),
+            const SizedBox(height: 24),
+            if (_url.isNotEmpty)
+              Text(
+                _url,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            if (_status.isNotEmpty) ...[
               const SizedBox(height: 16),
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  if (_downloading)
-                    const SizedBox(
-                      width: 16, height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                  if (_downloading) const SizedBox(width: 12),
-                  if (_status == 'Done!' || _status == 'Already downloaded!')
-                    Icon(Icons.check_circle,
-                        color: Colors.green.shade400, size: 20),
-                  if (_status == 'Done!' || _status == 'Already downloaded!')
+                  if (!isError) ...[
+                    Icon(Icons.check_circle, color: Colors.green.shade400, size: 20),
                     const SizedBox(width: 8),
+                  ],
                   Flexible(
                     child: Text(
                       _status,
                       style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                            color: _status.startsWith('Error')
+                            color: isError
                                 ? Theme.of(context).colorScheme.error
                                 : null,
                           ),

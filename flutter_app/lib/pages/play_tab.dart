@@ -1,10 +1,9 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:just_audio/just_audio.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../services/audio_service.dart';
-import '../services/api_service.dart';
+import '../services/local_library.dart';
 import '../models/subtitle_entry.dart';
 
 class PlayTab extends StatefulWidget {
@@ -53,11 +52,15 @@ class _PlayTabState extends State<PlayTab> {
 
     setState(() => _loadingSubtitles = true);
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final serverUrl = prefs.getString('server_url') ?? '';
-      final token = prefs.getString('access_token') ?? '';
-      final api = ApiService(serverUrl, accessToken: token);
-      final vtt = await api.getSubtitleText(video.youtubeId);
+      await LocalLibrary.ensureInitialized();
+      final file = File(LocalLibrary.subPath(video.youtubeId));
+      if (!await file.exists()) {
+        if (mounted) {
+          setState(() { _subtitles = []; _loadingSubtitles = false; });
+        }
+        return;
+      }
+      final vtt = await file.readAsString();
       final entries = parseVtt(vtt);
       if (mounted) {
         setState(() {

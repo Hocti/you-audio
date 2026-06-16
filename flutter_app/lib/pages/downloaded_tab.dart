@@ -1,80 +1,109 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../models/video.dart';
-import '../services/api_service.dart';
+import '../models/local_video.dart';
 import '../services/audio_service.dart';
+import '../services/local_library.dart';
+import '../services/download_manager.dart';
 
 enum SortMode { downloadTime, channel, listenStatus }
 enum FilterMode { all, unlistened, listened }
 
 class DownloadedTab extends StatefulWidget {
-  final ApiService api;
   final VoidCallback onPlayTap;
 
-  const DownloadedTab({super.key, required this.api, required this.onPlayTap});
+  const DownloadedTab({super.key, required this.onPlayTap});
 
   @override
   State<DownloadedTab> createState() => _DownloadedTabState();
 }
 
 class _DownloadedTabState extends State<DownloadedTab> {
-  List<Video> _videos = [];
+  List<LocalVideo> _videos = [];
   Map<String, int> _progressMap = {};
-  // ignore: unused_field
-  Map<String, bool> _openedMap = {};
   Map<String, bool> _completedMap = {};
   bool _loading = true;
-  String? _error;
   SortMode _sortMode = SortMode.downloadTime;
   FilterMode _filterMode = FilterMode.all;
 
   @override
   void initState() {
     super.initState();
-    _loadVideos();
+    DownloadManager.instance.jobs.addListener(_onJobsChanged);
+    _load();
   }
 
-  Future<void> _loadVideos() async {
-    setState(() { _loading = true; _error = null; });
-    try {
-      final videos = await widget.api.getVideos();
-      final prefs = await SharedPreferences.getInstance();
-      final progressMap = <String, int>{};
-      final openedMap = <String, bool>{};
-      final completedMap = <String, bool>{};
-      for (final v in videos) {
-        final pos = prefs.getInt('progress_${v.youtubeId}');
-        if (pos != null) progressMap[v.youtubeId] = pos;
-        openedMap[v.youtubeId] = prefs.getBool('opened_${v.youtubeId}') ?? false;
-        completedMap[v.youtubeId] = prefs.getBool('completed_${v.youtubeId}') ?? false;
+  @override
+  void dispose() {
+    DownloadManager.instance.jobs.removeListener(_onJobsChanged);
+    super.dispose();
+  }
+
+  // A job finishing adds it to the library and removes itself, so reload.
+  void _onJobsChanged() => _load(showSpinner: false);
+
+  Future<void> _load({bool showSpinner = true}) async {
+    if (showSpinner && mounted) setState(() => _loading = true);
+    await LocalLibrary.ensureInitialized();
+    final videos = LocalLibrary.all();
+    final prefs = await SharedPreferences.getInstance();
+    final progressMap = <String, int>{};
+    final completedMap = <String, bool>{};
+    for (final v in videos) {
+      final pos = prefs.getInt('progress_${v.youtubeId}');
+      if (pos != null) progressMap[v.youtubeId] = pos;
+      completedMap[v.youtubeId] =
+          prefs.getBool('completed_${v.youtubeId}') ?? false;
+    }
+    if (mounted) {
+      setState(() {
+        _videos = videos;
+        _progressMap = progressMap;
+        _completedMap = completedMap;
+        _loading = false;
+      });
+      if (AudioManager.isInitialized) {
+        AudioManager.handler.setPlaylist(videos.map((e) => e.toVideo()).toList());
       }
-      if (mounted) {
-        setState(() {
-          _videos = videos;
-          _progressMap = progressMap;
-          _openedMap = openedMap;
-          _completedMap = completedMap;
-          _loading = false;
-        });
-        if (AudioManager.isInitialized) {
-          AudioManager.handler.setPlaylist(videos);
-        }
-      }
-    } catch (e) {
-      if (mounted) setState(() { _error = e.toString(); _loading = false; });
     }
   }
 
-  Future<void> _playVideo(Video video) async {
+  Future<void> _playVideo(LocalVideo video) async {
+    final path = LocalLibrary.audioPath(video.youtubeId);
+    final exists = File(path).existsSync();
+    if (!AudioManager.isInitialized) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Audio engine not ready yet — try again in a moment')),
+        );
+      }
+      return;
+    }
+    if (!exists) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Audio file missing on device')),
+        );
+      }
+      return;
+    }
     final handler = AudioManager.handler;
-    handler.setPlaylist(_videos);
-    await handler.playVideo(video);
-    widget.onPlayTap();
-    if (mounted) setState(() {});
+    handler.setPlaylist(_videos.map((e) => e.toVideo()).toList());
+    try {
+      await handler.playVideo(video.toVideo());
+      widget.onPlayTap();
+      if (mounted) setState(() {});
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Playback failed: $e')),
+        );
+      }
+    }
   }
 
-  List<Video> get _displayVideos {
+  List<LocalVideo> get _displayVideos {
     var list = _videos.toList();
 
     switch (_filterMode) {
@@ -101,13 +130,13 @@ class _DownloadedTabState extends State<DownloadedTab> {
         });
         break;
       case SortMode.downloadTime:
-        break; // default order from backend
+        break; // already newest-first from the library
     }
 
     return list;
   }
 
-  void _showContextMenu(BuildContext ctx, Video video) {
+  void _showContextMenu(BuildContext ctx, LocalVideo video) {
     showModalBottomSheet(
       context: ctx,
       builder: (_) => Column(
@@ -119,7 +148,7 @@ class _DownloadedTabState extends State<DownloadedTab> {
             onTap: () {
               Navigator.pop(ctx);
               if (AudioManager.isInitialized) {
-                AudioManager.handler.queueNext(video);
+                AudioManager.handler.queueNext(video.toVideo());
               }
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(content: Text('"${video.title}" queued next')),
@@ -128,7 +157,7 @@ class _DownloadedTabState extends State<DownloadedTab> {
           ),
           ListTile(
             leading: const Icon(Icons.delete_outline),
-            title: const Text('Delete'),
+            title: const Text('Delete from device'),
             onTap: () {
               Navigator.pop(ctx);
               _deleteVideo(video);
@@ -139,12 +168,12 @@ class _DownloadedTabState extends State<DownloadedTab> {
     );
   }
 
-  Future<void> _deleteVideo(Video video) async {
+  Future<void> _deleteVideo(LocalVideo video) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
         title: const Text('Delete'),
-        content: Text('Delete "${video.title}"?'),
+        content: Text('Delete "${video.title}" from this device?'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -157,17 +186,9 @@ class _DownloadedTabState extends State<DownloadedTab> {
         ],
       ),
     );
-    if (confirmed == true && mounted) {
-      try {
-        await widget.api.deleteVideo(video.youtubeId);
-        await _loadVideos();
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Delete failed: $e')),
-          );
-        }
-      }
+    if (confirmed == true) {
+      await LocalLibrary.remove(video.youtubeId);
+      await _load(showSpinner: false);
     }
   }
 
@@ -182,6 +203,23 @@ class _DownloadedTabState extends State<DownloadedTab> {
     return 'Played $m:${s.toString().padLeft(2, '0')}';
   }
 
+  String _stageLabel(DownloadJob j) {
+    switch (j.stage) {
+      case DownloadStage.checking:
+        return 'Checking…';
+      case DownloadStage.downloading:
+        return 'Downloading ${(j.percent * 100).round()}%';
+      case DownloadStage.converting:
+        return 'Converting…';
+      case DownloadStage.saving:
+        return 'Saving to device…';
+      case DownloadStage.done:
+        return 'Done';
+      case DownloadStage.error:
+        return 'Failed: ${j.error ?? 'unknown error'}';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -191,7 +229,7 @@ class _DownloadedTabState extends State<DownloadedTab> {
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: _loadVideos,
+            onPressed: () => _load(),
             tooltip: 'Refresh',
           ),
         ],
@@ -234,45 +272,25 @@ class _DownloadedTabState extends State<DownloadedTab> {
               ],
             ),
           ),
-          Expanded(child: _buildContent()),
+          Expanded(
+            child: ValueListenableBuilder<List<DownloadJob>>(
+              valueListenable: DownloadManager.instance.jobs,
+              builder: (context, jobs, _) => _buildContent(jobs),
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildContent() {
-    if (_loading) return const Center(child: CircularProgressIndicator());
-
-    if (_error != null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(Icons.error_outline, size: 48,
-                  color: Theme.of(context).colorScheme.error),
-              const SizedBox(height: 16),
-              Text('Failed to load videos',
-                  style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 8),
-              Text(_error!, style: Theme.of(context).textTheme.bodySmall,
-                  textAlign: TextAlign.center),
-              const SizedBox(height: 16),
-              FilledButton.icon(
-                onPressed: _loadVideos,
-                icon: const Icon(Icons.refresh),
-                label: const Text('Retry'),
-              ),
-            ],
-          ),
-        ),
-      );
+  Widget _buildContent(List<DownloadJob> jobs) {
+    if (_loading && _videos.isEmpty && jobs.isEmpty) {
+      return const Center(child: CircularProgressIndicator());
     }
 
     final displayVideos = _displayVideos;
 
-    if (displayVideos.isEmpty) {
+    if (jobs.isEmpty && displayVideos.isEmpty) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -286,13 +304,13 @@ class _DownloadedTabState extends State<DownloadedTab> {
             ),
             const SizedBox(height: 16),
             Text(
-              _videos.isEmpty ? 'No audio files yet' : 'No results for this filter',
+              _videos.isEmpty ? 'No audio on this device yet' : 'No results for this filter',
               style: Theme.of(context).textTheme.titleMedium,
             ),
             if (_videos.isEmpty) ...[
               const SizedBox(height: 8),
               Text(
-                'Download some YouTube videos first',
+                'Download a YouTube link from the Download tab',
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
@@ -304,86 +322,118 @@ class _DownloadedTabState extends State<DownloadedTab> {
     }
 
     return RefreshIndicator(
-      onRefresh: _loadVideos,
-      child: ListView.builder(
-        itemCount: displayVideos.length,
+      onRefresh: () => _load(showSpinner: false),
+      child: ListView(
         padding: const EdgeInsets.only(bottom: 8),
-        itemBuilder: (context, index) {
-          final video = displayVideos[index];
-          final progress = _progressMap[video.youtubeId];
-          final isPlaying = AudioManager.isInitialized &&
-              AudioManager.handler.currentVideo?.youtubeId == video.youtubeId;
-
-          return ListTile(
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            leading: ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: SizedBox(
-                width: 80, height: 56,
-                child: CachedNetworkImage(
-                  imageUrl: widget.api.thumbnailUrl(video.youtubeId),
-                  fit: BoxFit.cover,
-                  placeholder: (_, __) => Container(
-                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                    child: const Icon(Icons.music_note, size: 24),
-                  ),
-                  errorWidget: (_, __, ___) => Container(
-                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                    child: const Icon(Icons.music_note, size: 24),
-                  ),
-                ),
-              ),
-            ),
-            title: Text(video.title, maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: isPlaying ? Theme.of(context).colorScheme.primary : null,
-                  fontWeight: isPlaying ? FontWeight.bold : null,
-                )),
-            subtitle: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(video.channel, maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodySmall),
-                const SizedBox(height: 2),
-                Row(
-                  children: [
-                    Text(video.durationFormatted,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              color: Theme.of(context).colorScheme.onSurfaceVariant)),
-                    if (video.hasSubtitle) ...[
-                      const SizedBox(width: 8),
-                      Icon(Icons.closed_caption_outlined,
-                          size: 14,
-                          color: Theme.of(context).colorScheme.onSurfaceVariant),
-                    ],
-                    if (_completedMap[video.youtubeId] ?? false) ...[
-                      const SizedBox(width: 8),
-                      Icon(Icons.check_circle_outline,
-                          size: 14,
-                          color: Colors.green.shade400),
-                    ],
-                    if (progress != null) ...[
-                      const SizedBox(width: 8),
-                      Text(_formatProgress(progress, video.duration),
-                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                color: Theme.of(context).colorScheme.primary)),
-                    ],
-                  ],
-                ),
-              ],
-            ),
-            trailing: isPlaying
-                ? Icon(Icons.equalizer,
-                    color: Theme.of(context).colorScheme.primary)
-                : const Icon(Icons.play_arrow),
-            onTap: () => _playVideo(video),
-            onLongPress: () => _showContextMenu(context, video),
-          );
-        },
+        children: [
+          ...jobs.map(_buildJobTile),
+          ...displayVideos.map(_buildVideoTile),
+        ],
       ),
+    );
+  }
+
+  Widget _buildJobTile(DownloadJob job) {
+    final isError = job.stage == DownloadStage.error;
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      leading: SizedBox(
+        width: 80, height: 56,
+        child: Container(
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(isError ? Icons.error_outline : Icons.downloading,
+              color: isError
+                  ? Theme.of(context).colorScheme.error
+                  : Colors.amber),
+        ),
+      ),
+      title: Text(job.title, maxLines: 2, overflow: TextOverflow.ellipsis),
+      subtitle: Text(_stageLabel(job),
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: isError ? Theme.of(context).colorScheme.error : null,
+              )),
+      trailing: isError
+          ? IconButton(
+              icon: const Icon(Icons.close),
+              tooltip: 'Dismiss',
+              onPressed: () => DownloadManager.instance.dismiss(job.id),
+            )
+          : const SizedBox(
+              width: 20, height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+    );
+  }
+
+  Widget _buildVideoTile(LocalVideo video) {
+    final progress = _progressMap[video.youtubeId];
+    final isPlaying = AudioManager.isInitialized &&
+        AudioManager.handler.currentVideo?.youtubeId == video.youtubeId;
+    final thumb = File(LocalLibrary.thumbPath(video.youtubeId));
+
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      leading: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: SizedBox(
+          width: 80, height: 56,
+          child: thumb.existsSync()
+              ? Image.file(thumb, fit: BoxFit.cover)
+              : Container(
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  child: const Icon(Icons.music_note, size: 24),
+                ),
+        ),
+      ),
+      title: Text(video.title, maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: isPlaying ? Theme.of(context).colorScheme.primary : null,
+            fontWeight: isPlaying ? FontWeight.bold : null,
+          )),
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(video.channel, maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodySmall),
+          const SizedBox(height: 2),
+          Row(
+            children: [
+              Text(video.toVideo().durationFormatted,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant)),
+              if (video.hasSubtitle) ...[
+                const SizedBox(width: 8),
+                Icon(Icons.closed_caption_outlined,
+                    size: 14,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant),
+              ],
+              if (_completedMap[video.youtubeId] ?? false) ...[
+                const SizedBox(width: 8),
+                Icon(Icons.check_circle_outline,
+                    size: 14, color: Colors.green.shade400),
+              ],
+              if (progress != null) ...[
+                const SizedBox(width: 8),
+                Text(_formatProgress(progress, video.duration),
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.primary)),
+              ],
+            ],
+          ),
+        ],
+      ),
+      trailing: isPlaying
+          ? Icon(Icons.equalizer, color: Theme.of(context).colorScheme.primary)
+          : const Icon(Icons.play_arrow),
+      onTap: () => _playVideo(video),
+      onLongPress: () => _showContextMenu(context, video),
     );
   }
 }

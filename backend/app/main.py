@@ -27,11 +27,20 @@ from .downloader import (
 )
 from .models import Base, Video
 from .schemas import (
+    ChannelResolveResponse,
+    ChannelVideoOut,
+    ChannelVideosResponse,
     DownloadRequest,
     DownloadResponse,
     ProgressResponse,
     VideoListResponse,
     VideoOut,
+)
+from .youtube_api import (
+    YouTubeApiError,
+    fetch_latest_videos,
+    get_cached,
+    resolve_channel,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -263,6 +272,39 @@ async def serve_subtitles(
         raise HTTPException(status_code=404, detail="Subtitle file missing from disk")
 
     return FileResponse(path=path, media_type="text/vtt")
+
+
+# ---------------------------------------------------------------------------
+# GET /api/channel/resolve?q=...  (URL / @handle / id -> channel id)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/channel/resolve", response_model=ChannelResolveResponse)
+async def resolve_channel_route(q: str, _: None = Depends(_verify_token)):
+    try:
+        result = await resolve_channel(q)
+    except YouTubeApiError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+    return ChannelResolveResponse(**result)
+
+
+# ---------------------------------------------------------------------------
+# GET /api/channel/{channel_id}/videos
+# ---------------------------------------------------------------------------
+
+@app.get("/api/channel/{channel_id}/videos", response_model=ChannelVideosResponse)
+async def channel_videos(channel_id: str, _: None = Depends(_verify_token)):
+    cached = get_cached(channel_id) is not None
+    try:
+        videos = await fetch_latest_videos(channel_id)
+    except YouTubeApiError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+
+    return ChannelVideosResponse(
+        channel_id=channel_id,
+        cached=cached,
+        total=len(videos),
+        videos=[ChannelVideoOut(**v) for v in videos],
+    )
 
 
 # ---------------------------------------------------------------------------

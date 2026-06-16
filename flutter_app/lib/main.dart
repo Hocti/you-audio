@@ -1,8 +1,18 @@
 import 'package:flutter/material.dart';
 import 'pages/server_setup_page.dart';
+import 'services/audio_service.dart';
+import 'services/local_library.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Initialize storage + the background audio service here (the canonical
+  // audio_service pattern) rather than inside a navigated widget.
+  try {
+    await LocalLibrary.ensureInitialized();
+    await AudioManager.init();
+  } catch (e, st) {
+    debugPrint('Audio init failed: $e\n$st');
+  }
   runApp(const MyApp());
 }
 
