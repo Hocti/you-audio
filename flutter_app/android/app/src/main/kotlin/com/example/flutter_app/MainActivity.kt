@@ -2,6 +2,7 @@ package com.example.flutter_app
 
 import android.content.Intent
 import android.os.Bundle
+import android.util.Log
 import com.ryanheise.audioservice.AudioServiceActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -23,6 +24,7 @@ class MainActivity : AudioServiceActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         initialShared = extractSharedText(intent)
+        Log.d("SHARE", "onCreate action=${intent?.action} type=${intent?.type} shared=$initialShared")
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -33,6 +35,7 @@ class MainActivity : AudioServiceActivity() {
         methodChannel!!.setMethodCallHandler { call, result ->
             when (call.method) {
                 "getInitialShare" -> {
+                    Log.d("SHARE", "getInitialShare -> $initialShared")
                     result.success(initialShared)
                     initialShared = null
                 }
@@ -51,6 +54,7 @@ class MainActivity : AudioServiceActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         val text = extractSharedText(intent)
+        Log.d("SHARE", "onNewIntent action=${intent.action} type=${intent.type} text=$text channel=${methodChannel != null}")
         if (text != null) {
             methodChannel?.invokeMethod("onShare", text)
         }

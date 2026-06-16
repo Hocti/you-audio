@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:audio_service/audio_service.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -157,10 +158,14 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
   }
 
   @override
-  Future<void> play() => _player.play();
+  Future<void> play() {
+    debugPrint('[NOTIF] play() called');
+    return _player.play();
+  }
 
   @override
   Future<void> pause() async {
+    debugPrint('[NOTIF] pause() called');
     if (_currentVideo != null) {
       await _savePosition(
         _currentVideo!.youtubeId,
@@ -191,6 +196,7 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
   /// Next track in the playlist (audio change), not a 30s seek.
   @override
   Future<void> skipToNext() async {
+    debugPrint('[NOTIF] skipToNext() called, playlist=${_playlist.length}');
     if (_playlist.isEmpty) return;
     final i = _currentIndex();
     if (i >= 0 && i + 1 < _playlist.length) {
@@ -202,6 +208,7 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
   /// first (standard player behaviour) before stepping to the previous track.
   @override
   Future<void> skipToPrevious() async {
+    debugPrint('[NOTIF] skipToPrevious() called');
     if (_player.position > const Duration(seconds: 3)) {
       await _player.seek(Duration.zero);
       return;
@@ -218,6 +225,7 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
   /// 30-second forward seek (the ±30s buttons / notification fast-forward).
   @override
   Future<void> fastForward() async {
+    debugPrint('[NOTIF] fastForward() called');
     final newPos = _player.position + const Duration(seconds: 30);
     final dur = _player.duration ?? Duration.zero;
     await _player.seek(newPos < dur ? newPos : dur);
@@ -226,6 +234,7 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
   /// 30-second backward seek.
   @override
   Future<void> rewind() async {
+    debugPrint('[NOTIF] rewind() called');
     final newPos = _player.position - const Duration(seconds: 30);
     await _player.seek(newPos > Duration.zero ? newPos : Duration.zero);
   }

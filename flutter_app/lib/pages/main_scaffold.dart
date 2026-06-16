@@ -46,6 +46,7 @@ class _MainScaffoldState extends State<MainScaffold> {
     ShareHandler.instance.onShare = _handleShare;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final initial = await ShareHandler.instance.getInitial();
+      debugPrint('[SHARE] getInitial() returned: ${initial ?? "(null)"}');
       if (initial != null) _handleShare(initial);
     });
   }
@@ -59,7 +60,9 @@ class _MainScaffoldState extends State<MainScaffold> {
 
   void _handleShare(String text) {
     final url = firstUrl(text) ?? text.trim();
-    switch (classifyUrl(url)) {
+    final kind = classifyUrl(url);
+    debugPrint('[SHARE] _handleShare text="$text" url="$url" kind=$kind');
+    switch (kind) {
       case SharedLinkKind.video:
         // Fire-and-forget download, then drop to the background so the user
         // stays in the app they shared from.
