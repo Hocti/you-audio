@@ -92,7 +92,8 @@
       "Bash(timeout 540 flutter build apk --debug)",
       "Bash(timeout 300 flutter build apk --debug)",
       "Bash(timeout 400 flutter build apk --debug)",
-      "Bash(pkill -f \"uvicorn app.main:app --host 127.0.0.1 --port 8012\")"
+      "Bash(pkill -f \"uvicorn app.main:app --host 127.0.0.1 --port 8012\")",
+      "Bash(timeout 580 flutter build apk --debug)"
     ],
     "additionalDirectories": [
       "/home/hocti/.claude",

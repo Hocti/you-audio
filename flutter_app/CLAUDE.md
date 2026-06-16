@@ -35,6 +35,7 @@ flutter_app/
 │   │   ├── local_library.dart         # On-device library: files + library.json index
 │   │   ├── download_manager.dart      # Orchestrates backend convert + pull-to-device
 │   │   ├── bookmark_service.dart      # Bookmarked channels (SharedPreferences) + URL→id
+│   │   ├── share_handler.dart         # OS share-intent bridge + URL classification
 │   │   └── audio_service.dart         # Background audio playback logic
 │   ├── pages/
 │   │   ├── server_setup_page.dart     # Setup screen: enter backend URL + access token
@@ -79,9 +80,10 @@ flutter_app/
 ### Tab 3 — `downloaded_tab.dart`
 - Reads the **local library** via `LocalLibrary.all()` (offline; no backend call) and listens to `DownloadManager.instance.jobs` to show in-progress download rows at the top.
 - Thumbnails load from local files (`Image.file`).
-- Filter chips: **All / Unlistened / Listened** (based on `completed_*` SharedPreferences keys).
-- Sort dropdown: by date, channel, or listen status.
+- Filter dropdown: **All / Unlistened / Listened** (based on `completed_*` SharedPreferences keys).
+- Sort dropdown: by date, channel, or listen status, plus an asc/desc arrow toggle (`_sortAsc`). Re-picking the current sort type or tapping the arrow flips direction; the default is descending (newest-first).
 - Tap a track to play it (local file); long-press for a context menu with **Play Next** and **Delete from device**.
+- **Swipe a row left** to delete: the red **Delete** background appears only once the drag passes a ~100px threshold; releasing past it removes the track (with a SnackBar, no confirm dialog), releasing before it snaps back. Implemented with `Dismissible` (`onUpdate` tracks drag progress; `dismissThresholds` ≈ 100px/width).
 - **Play Next** calls `audioHandler.queueNext(video)`.
 - **Delete from device** calls `LocalLibrary.remove(youtubeId)` (removes local files only; the backend copy is untouched).
 
@@ -212,12 +214,35 @@ Shown at the bottom of tabs 1–3.
 
 ---
 
+## OS Share Integration (`lib/services/share_handler.dart` + `MainActivity.kt`)
+
+The app registers for the Android share sheet via an `ACTION_SEND` (`text/plain`)
+`<intent-filter>` on `MainActivity`. Sharing a YouTube link routes by type:
+
+- **Video link** (`watch?v=`, `youtu.be/`, `/shorts/`, `/live/`) → starts the
+  normal `DownloadManager.instance.start(...)` download, then calls
+  `moveTaskToBack(true)` so the app drops to the background — the user stays in
+  whatever app they shared from. (The download runs in the Flutter isolate while
+  backgrounded; very long downloads risk the OS killing the process — an accepted
+  trade-off of not using a native foreground service.)
+- **Channel link** (`/channel/UC…`, `/@handle`, `/c/`, `/user/`) → opens the app,
+  switches to the Channel tab, and opens that channel's detail view (resolving the
+  id via the same path as a pasted channel).
+- **Anything else** → opens the app normally on the Link tab.
+
+Mechanics: `MainActivity.kt` reads the shared text (cold start via
+`getInitialShare`, while-running via `onShare` over the `app/share`
+`MethodChannel`) and exposes `moveToBackground`. `MainScaffold` wires the handler
+in `initState`, classifies the URL with `share_handler.dart`, and hands channel
+links to `ChannelTab` through a `ValueNotifier<String?> openRequest`.
+
 ## Android Manifest Notes (`android/app/src/main/AndroidManifest.xml`)
 
 - `android:usesCleartextTraffic="true"` — allows HTTP (not just HTTPS) connections. Required for connecting to the NAS over a local network without a certificate.
 - `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_MEDIA_PLAYBACK` — required for background audio on Android 14+.
 - The `AudioService` and `MediaButtonReceiver` entries are required by the `audio_service` package.
-- **`MainActivity` must extend `com.ryanheise.audioservice.AudioServiceActivity`** (see `MainActivity.kt`), not the plain `FlutterActivity`. Otherwise `AudioService.init()` throws `PlatformException("The Activity class declared in your AndroidManifest.xml is wrong…")` and playback silently never starts.
+- The second `<intent-filter>` on `MainActivity` (`ACTION_SEND` / `text/plain`) puts the app in the OS share sheet; `launchMode="singleTop"` means an in-flight share reaches `onNewIntent` instead of restarting the activity.
+- **`MainActivity` must extend `com.ryanheise.audioservice.AudioServiceActivity`** (see `MainActivity.kt`), not the plain `FlutterActivity`. Otherwise `AudioService.init()` throws `PlatformException("The Activity class declared in your AndroidManifest.xml is wrong…")` and playback silently never starts. `MainActivity` also overrides `configureFlutterEngine` to register the `app/share` MethodChannel.
 
 ---
 

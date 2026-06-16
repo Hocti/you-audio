@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
+import '../services/download_manager.dart';
+import '../services/share_handler.dart';
 import '../widgets/player_bar.dart';
 import 'link_tab.dart';
 import 'channel_tab.dart';
@@ -28,12 +30,50 @@ class _MainScaffoldState extends State<MainScaffold> {
   late String _serverUrl;
   late String _accessToken;
 
+  // Carries a shared channel link/id to the Channel tab to open its detail view.
+  final ValueNotifier<String?> _openChannelRequest = ValueNotifier<String?>(null);
+
   @override
   void initState() {
     super.initState();
     _serverUrl = widget.serverUrl;
     _accessToken = widget.accessToken;
     _api = ApiService(_serverUrl, accessToken: _accessToken);
+
+    // Bridge OS share intents. A shared video downloads in the background; a
+    // shared channel opens its detail page.
+    ShareHandler.instance.init();
+    ShareHandler.instance.onShare = _handleShare;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final initial = await ShareHandler.instance.getInitial();
+      if (initial != null) _handleShare(initial);
+    });
+  }
+
+  @override
+  void dispose() {
+    ShareHandler.instance.onShare = null;
+    _openChannelRequest.dispose();
+    super.dispose();
+  }
+
+  void _handleShare(String text) {
+    final url = firstUrl(text) ?? text.trim();
+    switch (classifyUrl(url)) {
+      case SharedLinkKind.video:
+        // Fire-and-forget download, then drop to the background so the user
+        // stays in the app they shared from.
+        DownloadManager.instance.start(_api, url);
+        ShareHandler.instance.moveToBackground();
+        break;
+      case SharedLinkKind.channel:
+        if (mounted) setState(() => _currentIndex = 1);
+        _openChannelRequest.value = url;
+        break;
+      case SharedLinkKind.unknown:
+        if (mounted) setState(() => _currentIndex = 0);
+        break;
+    }
   }
 
   Future<void> _applyServerConfig(String url, String token) async {
@@ -59,6 +99,7 @@ class _MainScaffoldState extends State<MainScaffold> {
         key: ValueKey('channel|$_serverUrl|$_accessToken'),
         api: _api,
         onPlayTap: _goToPlay,
+        openRequest: _openChannelRequest,
       ),
       DownloadedTab(onPlayTap: _goToPlay),
       const PlayTab(),

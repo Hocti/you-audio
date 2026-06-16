@@ -17,7 +17,18 @@ import '../services/local_library.dart';
 class ChannelTab extends StatefulWidget {
   final ApiService api;
   final VoidCallback onPlayTap;
-  const ChannelTab({super.key, required this.api, required this.onPlayTap});
+
+  /// Set by the host (e.g. a shared channel link) to open a channel's detail
+  /// view from outside this tab. The value is a channel id or any channel URL;
+  /// it is resolved like a pasted channel. Consumed (reset to null) once handled.
+  final ValueNotifier<String?>? openRequest;
+
+  const ChannelTab({
+    super.key,
+    required this.api,
+    required this.onPlayTap,
+    this.openRequest,
+  });
 
   @override
   State<ChannelTab> createState() => _ChannelTabState();
@@ -34,6 +45,24 @@ class _ChannelTabState extends State<ChannelTab> {
   void initState() {
     super.initState();
     _loadBookmarks();
+    widget.openRequest?.addListener(_onOpenRequest);
+    // Handle a request that was set before this tab was built.
+    if (widget.openRequest?.value != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _onOpenRequest());
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.openRequest?.removeListener(_onOpenRequest);
+    super.dispose();
+  }
+
+  void _onOpenRequest() {
+    final raw = widget.openRequest?.value;
+    if (raw == null || !mounted) return;
+    widget.openRequest!.value = null; // consume (re-fires listener with null)
+    _openFromInput(raw);
   }
 
   Future<void> _loadBookmarks() async {
@@ -48,6 +77,15 @@ class _ChannelTabState extends State<ChannelTab> {
       setState(() => _pasteError = 'Clipboard is empty');
       return;
     }
+    await _openFromInput(raw);
+  }
+
+  /// Opens the detail view for a channel id or URL, resolving via the backend
+  /// when it isn't a bare/embedded UC… id. Shared by the paste button and
+  /// external [ChannelTab.openRequest] requests.
+  Future<void> _openFromInput(String raw) async {
+    raw = raw.trim();
+    if (raw.isEmpty) return;
     // Fast path: a bare/embedded UC… id needs no backend call.
     final localId = extractChannelId(raw);
     if (localId != null) {
@@ -98,6 +136,7 @@ class _ChannelTabState extends State<ChannelTab> {
       return _buildPasteView(context);
     }
     return _ChannelDetailView(
+      key: ValueKey(_channelId),
       api: widget.api,
       channelId: _channelId!,
       initialName: _channelName,
@@ -208,6 +247,7 @@ class _ChannelDetailView extends StatefulWidget {
   final VoidCallback onPlayTap;
 
   const _ChannelDetailView({
+    super.key,
     required this.api,
     required this.channelId,
     required this.initialName,
