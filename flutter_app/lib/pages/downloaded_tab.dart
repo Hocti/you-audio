@@ -25,6 +25,12 @@ class _DownloadedTabState extends State<DownloadedTab> {
   bool _loading = true;
   SortMode _sortMode = SortMode.downloadTime;
   FilterMode _filterMode = FilterMode.all;
+  // false = the default/base order (newest-first for date); true reverses it.
+  bool _sortAsc = false;
+  // Tracks the row currently being swiped, so the "Delete" label can appear
+  // only once the drag passes the threshold.
+  String? _swipingId;
+  double _swipeProgress = 0; // 0..1 fraction of row width for the swiping row
 
   @override
   void initState() {
@@ -132,6 +138,9 @@ class _DownloadedTabState extends State<DownloadedTab> {
       case SortMode.downloadTime:
         break; // already newest-first from the library
     }
+
+    // The base order above is the default (descending) view; flip for ascending.
+    if (_sortAsc) list = list.reversed.toList();
 
     return list;
   }
@@ -241,22 +250,15 @@ class _DownloadedTabState extends State<DownloadedTab> {
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
             child: Row(
               children: [
-                FilterChip(
-                  label: const Text('All'),
-                  selected: _filterMode == FilterMode.all,
-                  onSelected: (_) => setState(() => _filterMode = FilterMode.all),
-                ),
-                const SizedBox(width: 8),
-                FilterChip(
-                  label: const Text('Unlistened'),
-                  selected: _filterMode == FilterMode.unlistened,
-                  onSelected: (_) => setState(() => _filterMode = FilterMode.unlistened),
-                ),
-                const SizedBox(width: 8),
-                FilterChip(
-                  label: const Text('Listened'),
-                  selected: _filterMode == FilterMode.listened,
-                  onSelected: (_) => setState(() => _filterMode = FilterMode.listened),
+                DropdownButton<FilterMode>(
+                  value: _filterMode,
+                  items: const [
+                    DropdownMenuItem(value: FilterMode.all, child: Text('All')),
+                    DropdownMenuItem(value: FilterMode.unlistened, child: Text('Unlistened')),
+                    DropdownMenuItem(value: FilterMode.listened, child: Text('Listened')),
+                  ],
+                  onChanged: (v) { if (v != null) setState(() => _filterMode = v); },
+                  underline: const SizedBox.shrink(),
                 ),
                 const SizedBox(width: 16),
                 DropdownButton<SortMode>(
@@ -266,8 +268,24 @@ class _DownloadedTabState extends State<DownloadedTab> {
                     DropdownMenuItem(value: SortMode.channel, child: Text('By channel')),
                     DropdownMenuItem(value: SortMode.listenStatus, child: Text('By status')),
                   ],
-                  onChanged: (v) { if (v != null) setState(() => _sortMode = v); },
+                  // Re-picking the same sort type toggles direction; picking a
+                  // different type keeps the current direction.
+                  onChanged: (v) {
+                    if (v == null) return;
+                    setState(() {
+                      if (v == _sortMode) {
+                        _sortAsc = !_sortAsc;
+                      } else {
+                        _sortMode = v;
+                      }
+                    });
+                  },
                   underline: const SizedBox.shrink(),
+                ),
+                IconButton(
+                  icon: Icon(_sortAsc ? Icons.arrow_upward : Icons.arrow_downward),
+                  tooltip: _sortAsc ? 'Ascending' : 'Descending',
+                  onPressed: () => setState(() => _sortAsc = !_sortAsc),
                 ),
               ],
             ),
@@ -376,7 +394,14 @@ class _DownloadedTabState extends State<DownloadedTab> {
         AudioManager.handler.currentVideo?.youtubeId == video.youtubeId;
     final thumb = File(LocalLibrary.thumbPath(video.youtubeId));
 
-    return ListTile(
+    // Swipe-left-to-delete. The "Delete" label appears only once the drag passes
+    // a ~100px threshold; releasing past it deletes, releasing before it cancels.
+    final width = MediaQuery.of(context).size.width;
+    final thresholdFraction = (100 / width).clamp(0.05, 0.95).toDouble();
+    final pastThreshold =
+        _swipingId == video.youtubeId && _swipeProgress >= thresholdFraction;
+
+    final tile = ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       leading: ClipRRect(
         borderRadius: BorderRadius.circular(8),
@@ -434,6 +459,48 @@ class _DownloadedTabState extends State<DownloadedTab> {
           : const Icon(Icons.play_arrow),
       onTap: () => _playVideo(video),
       onLongPress: () => _showContextMenu(context, video),
+    );
+
+    return Dismissible(
+      key: ValueKey('dismiss_${video.youtubeId}'),
+      direction: DismissDirection.endToStart,
+      dismissThresholds: {DismissDirection.endToStart: thresholdFraction},
+      onUpdate: (details) {
+        setState(() {
+          _swipingId = video.youtubeId;
+          _swipeProgress = details.progress;
+        });
+      },
+      onDismissed: (_) async {
+        _swipingId = null;
+        await LocalLibrary.remove(video.youtubeId);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Deleted "${video.title}"')),
+          );
+        }
+        await _load(showSpinner: false);
+      },
+      background: Container(
+        color: pastThreshold ? Colors.red.shade700 : Colors.red.shade900,
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        child: AnimatedOpacity(
+          opacity: pastThreshold ? 1 : 0,
+          duration: const Duration(milliseconds: 120),
+          child: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.delete, color: Colors.white),
+              SizedBox(width: 8),
+              Text('Delete',
+                  style: TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.bold)),
+            ],
+          ),
+        ),
+      ),
+      child: tile,
     );
   }
 }
