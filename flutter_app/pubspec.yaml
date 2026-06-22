@@ -19,6 +19,8 @@ dependencies:
   path_provider: ^2.1.0
   # Keeps downloads alive when the app is backgrounded (Android foreground svc).
   flutter_foreground_task: ^8.0.0
+  # Opens YouTube links in the YouTube app / browser ("Open in YouTube").
+  url_launcher: ^6.2.0
 
 dev_dependencies:
   flutter_test:

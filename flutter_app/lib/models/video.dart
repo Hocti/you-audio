@@ -2,6 +2,7 @@ class Video {
   final String youtubeId;   // used in all URL paths
   final String title;
   final String channel;
+  final String? channelId;  // UC… id, when known (for "open channel")
   final int duration;       // seconds
   final bool hasSubtitle;
 
@@ -10,6 +11,7 @@ class Video {
     required this.title,
     required this.channel,
     required this.duration,
+    this.channelId,
     this.hasSubtitle = false,
   });
 
@@ -18,6 +20,7 @@ class Video {
       youtubeId: json['youtube_id'] as String? ?? '',
       title: json['title'] as String? ?? 'Unknown',
       channel: json['channel_name'] as String? ?? 'Unknown',
+      channelId: json['channel_id'] as String?,
       duration: json['duration'] as int? ?? 0,
       hasSubtitle: json['has_subtitle'] as bool? ?? false,
     );

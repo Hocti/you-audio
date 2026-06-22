@@ -198,6 +198,8 @@ class DownloadManager {
         meta?.title ?? (respVideo?['title'] as String?) ?? job.title;
     final channel =
         meta?.channel ?? (respVideo?['channel_name'] as String?) ?? 'Unknown';
+    final channelId =
+        meta?.channelId ?? (respVideo?['channel_id'] as String?);
     final duration =
         meta?.duration ?? (respVideo?['duration'] as int?) ?? 0;
     final hasSubtitle =
@@ -223,6 +225,7 @@ class DownloadManager {
       youtubeId: youtubeId,
       title: title,
       channel: channel,
+      channelId: channelId,
       duration: duration,
       hasSubtitle: hasSubtitle,
       downloadedAt: DateTime.now(),

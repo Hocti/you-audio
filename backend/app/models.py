@@ -19,6 +19,7 @@ class Video(Base):
     youtube_id: Mapped[str] = mapped_column(String(20), unique=True, index=True, nullable=False)
     title: Mapped[str | None] = mapped_column(Text, nullable=True)
     channel_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    channel_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     duration: Mapped[int | None] = mapped_column(Integer, nullable=True)  # seconds
     thumbnail_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     thumbnail_path: Mapped[str | None] = mapped_column(Text, nullable=True)

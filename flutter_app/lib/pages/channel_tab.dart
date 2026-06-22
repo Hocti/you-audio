@@ -8,6 +8,7 @@ import '../services/bookmark_service.dart';
 import '../services/download_manager.dart';
 import '../services/local_library.dart';
 import '../widgets/scrolling_text.dart';
+import '../widgets/video_actions.dart';
 
 /// Tab 2 — browse a YouTube channel's latest videos.
 ///
@@ -262,12 +263,41 @@ class _ChannelDetailViewState extends State<_ChannelDetailView> {
   bool _bookmarked = false;
   String? _channelName; // resolved from results
 
+  // Title search within the channel's videos.
+  bool _searching = false;
+  String _searchQuery = '';
+  final TextEditingController _searchController = TextEditingController();
+
   @override
   void initState() {
     super.initState();
     _channelName = widget.initialName;
     _loadBookmarkState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _toggleSearch() {
+    setState(() {
+      if (_searching) {
+        _searching = false;
+        _searchQuery = '';
+        _searchController.clear();
+      } else {
+        _searching = true;
+      }
+    });
+  }
+
+  List<ChannelVideo> get _displayVideos {
+    final q = _searchQuery.trim().toLowerCase();
+    if (q.isEmpty) return _videos;
+    return _videos.where((v) => v.title.toLowerCase().contains(q)).toList();
   }
 
   Future<void> _loadBookmarkState() async {
@@ -432,14 +462,30 @@ class _ChannelDetailViewState extends State<_ChannelDetailView> {
           onPressed: widget.onBack,
           tooltip: 'Back',
         ),
-        title: Text(_displayName, overflow: TextOverflow.ellipsis),
+        title: _searching
+            ? TextField(
+                controller: _searchController,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  hintText: 'Filter by title…',
+                  border: InputBorder.none,
+                ),
+                onChanged: (v) => setState(() => _searchQuery = v),
+              )
+            : Text(_displayName, overflow: TextOverflow.ellipsis),
         actions: [
           IconButton(
-            icon: Icon(_bookmarked ? Icons.star : Icons.star_border,
-                color: _bookmarked ? Colors.amber : null),
-            onPressed: _toggleBookmark,
-            tooltip: _bookmarked ? 'Remove bookmark' : 'Bookmark channel',
+            icon: Icon(_searching ? Icons.close : Icons.search),
+            tooltip: _searching ? 'Close search' : 'Search',
+            onPressed: _toggleSearch,
           ),
+          if (!_searching)
+            IconButton(
+              icon: Icon(_bookmarked ? Icons.star : Icons.star_border,
+                  color: _bookmarked ? Colors.amber : null),
+              onPressed: _toggleBookmark,
+              tooltip: _bookmarked ? 'Remove bookmark' : 'Bookmark channel',
+            ),
         ],
       ),
       body: _buildBody(context),
@@ -481,14 +527,19 @@ class _ChannelDetailViewState extends State<_ChannelDetailView> {
       return const Center(child: Text('No videos found for this channel'));
     }
 
+    final videos = _displayVideos;
+    if (videos.isEmpty) {
+      return const Center(child: Text('No videos match your search'));
+    }
+
     // Rebuild as downloads progress/complete so row state/icons stay current.
     return ValueListenableBuilder<List<DownloadJob>>(
       valueListenable: DownloadManager.instance.jobs,
       builder: (context, jobs, _) => ListView.builder(
-        itemCount: _videos.length,
+        itemCount: videos.length,
         padding: const EdgeInsets.only(bottom: 8),
         itemBuilder: (context, index) =>
-            _buildVideoTile(_videos[index], jobs),
+            _buildVideoTile(videos[index], jobs),
       ),
     );
   }
@@ -535,6 +586,69 @@ class _ChannelDetailViewState extends State<_ChannelDetailView> {
       ),
       trailing: _trailingFor(state, job),
       onTap: () => _onTapVideo(video, state),
+      onLongPress: () => _showContextMenu(video, state),
+    );
+  }
+
+  void _showContextMenu(ChannelVideo video, _RowState state) {
+    final alreadyHere = state == _RowState.downloaded ||
+        state == _RowState.downloading ||
+        state == _RowState.playing;
+    showModalBottomSheet(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (!alreadyHere)
+              ListTile(
+                leading: const Icon(Icons.download_outlined),
+                title: const Text('Download audio'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _onTapVideo(video, _RowState.none);
+                },
+              ),
+            ListTile(
+              leading: const Icon(Icons.content_copy),
+              title: const Text('Copy YouTube link'),
+              onTap: () {
+                Navigator.pop(ctx);
+                copyYoutubeLink(context, video.videoId);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.open_in_new),
+              title: const Text('Open in YouTube'),
+              onTap: () {
+                Navigator.pop(ctx);
+                openInYouTube(context, video.videoId);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.info_outline),
+              title: const Text('Detail'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _showDetail(video);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showDetail(ChannelVideo video) {
+    showVideoDetailSheet(
+      context,
+      title: video.title,
+      rows: [
+        ('Channel', video.channelName),
+        ('Video ID', video.videoId),
+        if (video.publishedAt != null)
+          ('Published', _formatDate(video.publishedAt)),
+      ],
     );
   }
 }

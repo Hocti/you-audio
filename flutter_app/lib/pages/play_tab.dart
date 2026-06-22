@@ -2,10 +2,12 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import '../services/audio_service.dart';
 import '../services/local_library.dart';
 import '../models/subtitle_entry.dart';
 import '../widgets/scrolling_text.dart';
+import 'queue_page.dart';
 
 class PlayTab extends StatefulWidget {
   const PlayTab({super.key});
@@ -27,18 +29,33 @@ class _PlayTabState extends State<PlayTab> {
   final GlobalKey _currentLineKey = GlobalKey();
   int _autoScrolledIndex = -1;
 
-  /// Scroll the current subtitle line into view when it changes. Uses the live
-  /// key's context, so it works for sequential playback (the common case); a
-  /// large seek lands on an adjacent line next tick and catches up.
+  /// Scroll the current subtitle line into view **only when it's no longer
+  /// visible** — so the list scrolls about a page at a time instead of on every
+  /// line. Uses the live key's render box vs. the scroll viewport to decide.
   void _maybeAutoScroll(int currentIdx) {
     if (currentIdx < 0 || currentIdx == _autoScrolledIndex) return;
     _autoScrolledIndex = currentIdx;
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       final ctx = _currentLineKey.currentContext;
-      if (ctx == null || !mounted) return;
+      if (ctx == null) return; // line not built (far off-screen)
+      final box = ctx.findRenderObject() as RenderBox?;
+      if (box == null || !box.hasSize) return;
+
+      final viewport = RenderAbstractViewport.of(box);
+      final position = Scrollable.of(ctx).position;
+      // Scroll offsets that would pin the line to the top / bottom edges.
+      final toTop = viewport.getOffsetToReveal(box, 0.0).offset;
+      final toBottom = viewport.getOffsetToReveal(box, 1.0).offset;
+      final lower = toTop < toBottom ? toTop : toBottom;
+      final upper = toTop < toBottom ? toBottom : toTop;
+
+      // Fully visible at the current offset → leave the view alone.
+      if (position.pixels >= lower - 1 && position.pixels <= upper + 1) return;
+
       Scrollable.ensureVisible(
         ctx,
-        alignment: 0.5, // center the line in the viewport
+        alignment: 0.3, // land near the top so a fresh page of lines follows
         duration: const Duration(milliseconds: 300),
         curve: Curves.easeInOut,
       );
@@ -157,6 +174,13 @@ class _PlayTabState extends State<PlayTab> {
           },
         ),
         centerTitle: true,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.queue_music),
+            tooltip: 'Up Next',
+            onPressed: () => QueuePage.open(context),
+          ),
+        ],
       ),
       body: StreamBuilder<Duration>(
         stream: player.positionStream,

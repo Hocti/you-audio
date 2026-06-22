@@ -66,6 +66,7 @@ backend/
 - One table: **`videos`**
 - Primary key: UUID (auto-generated)
 - Unique key: `youtube_id` — prevents duplicate downloads
+- `channel_id` (nullable) — the `UC…` id from yt-dlp metadata, captured on download/metadata so the app can "open channel" from a downloaded video. Only on rows created after this column was added (no migration for old rows).
 - `status` field values: `pending` → `downloading` → `converting` → `done` | `error`
 - Tables are created automatically on startup inside the `lifespan` function in `main.py`.
 - The DB URL is read from the `DATABASE_URL` environment variable.

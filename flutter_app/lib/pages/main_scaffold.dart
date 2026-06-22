@@ -101,6 +101,14 @@ class _MainScaffoldState extends State<MainScaffold> {
 
   void _goToPlay() => setState(() => _currentIndex = 3);
 
+  /// Switch to the Channel tab and open the given channel (id or name). Used by
+  /// the Downloaded tab's "Open channel" action; reuses the shared channel-open
+  /// request consumed by ChannelTab.
+  void _openChannel(String idOrName) {
+    setState(() => _currentIndex = 1);
+    _openChannelRequest.value = idOrName;
+  }
+
   @override
   Widget build(BuildContext context) {
     final tabs = <Widget>[
@@ -111,7 +119,7 @@ class _MainScaffoldState extends State<MainScaffold> {
         onPlayTap: _goToPlay,
         openRequest: _openChannelRequest,
       ),
-      DownloadedTab(onPlayTap: _goToPlay),
+      DownloadedTab(onPlayTap: _goToPlay, onOpenChannel: _openChannel),
       const PlayTab(),
       SettingsTab(
         initialUrl: _serverUrl,

@@ -11,7 +11,11 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
   final AudioPlayer _player = AudioPlayer();
   Video? _currentVideo;
   List<Video> _playlist = [];
-  Video? _queuedNext;
+  // User-managed "play next" queue (FIFO). Takes priority over the smart
+  // auto-advance; exposed via [queue] so the Queue page can rebuild.
+  final List<Video> _queue = [];
+  // Named `upNext` to avoid clashing with BaseAudioHandler.queue (MediaItems).
+  final ValueNotifier<List<Video>> upNext = ValueNotifier(const []);
   bool _markedCompleted = false;
   double _speed = 1.0; // remembered playback speed, applied to every track
   int _lastPosSaveMs = 0; // throttles position writes to ~once per 2s
@@ -39,8 +43,36 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
     await _player.setSpeed(_speed);
   }
 
-  void queueNext(Video video) {
-    _queuedNext = video;
+  void _publishQueue() => upNext.value = List.unmodifiable(_queue);
+
+  /// Append a track to the play-next queue.
+  void addToQueue(Video video) {
+    _queue.add(video);
+    _publishQueue();
+  }
+
+  /// Back-compat alias for the "Play Next" menu action.
+  void queueNext(Video video) => addToQueue(video);
+
+  void removeFromQueue(int index) {
+    if (index < 0 || index >= _queue.length) return;
+    _queue.removeAt(index);
+    _publishQueue();
+  }
+
+  void reorderQueue(int oldIndex, int newIndex) {
+    if (oldIndex < 0 || oldIndex >= _queue.length) return;
+    // ReorderableListView reports newIndex as the insertion slot *before*
+    // removal, so adjust when moving an item further down the list.
+    if (newIndex > oldIndex) newIndex -= 1;
+    final item = _queue.removeAt(oldIndex);
+    _queue.insert(newIndex.clamp(0, _queue.length), item);
+    _publishQueue();
+  }
+
+  void clearQueue() {
+    _queue.clear();
+    _publishQueue();
   }
 
   AudioPlayerHandler() {
@@ -159,9 +191,10 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
   }
 
   Future<void> playNextUnplayed() async {
-    if (_queuedNext != null) {
-      final next = _queuedNext!;
-      _queuedNext = null;
+    // The user-managed queue takes priority over smart auto-advance.
+    if (_queue.isNotEmpty) {
+      final next = _queue.removeAt(0);
+      _publishQueue();
       await playVideo(next);
       return;
     }
@@ -209,9 +242,15 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
   }
 
   @override
-  Future<void> play() {
+  Future<void> play() async {
     debugPrint('[NOTIF] play() called');
-    return _player.play();
+    // If the service was revived by a media button while nothing is loaded
+    // (e.g. the app was killed), reload the last-played track first so the
+    // hardware/Bluetooth/notification play button still starts playback.
+    if (_currentVideo == null) {
+      await restoreLastSession();
+    }
+    await _player.play();
   }
 
   @override

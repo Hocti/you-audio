@@ -222,6 +222,7 @@ def _sync_download(youtube_id: str, task_id: str) -> dict[str, Any]:
     return {
         "title": info.get("title"),
         "channel_name": info.get("channel") or info.get("uploader"),
+        "channel_id": info.get("channel_id") or info.get("uploader_id"),
         "duration": info.get("duration"),
         "thumbnail_url": info.get("thumbnail"),
         "mp3_path": str(mp3_path),
@@ -250,6 +251,7 @@ def _sync_metadata(youtube_id: str) -> dict[str, Any]:
     return {
         "title": info.get("title"),
         "channel_name": info.get("channel") or info.get("uploader"),
+        "channel_id": info.get("channel_id") or info.get("uploader_id"),
         "duration": info.get("duration"),
         "thumbnail_url": info.get("thumbnail"),
     }
@@ -300,6 +302,7 @@ async def run_download(youtube_id: str, task_id: str, video_db_id: uuid.UUID) ->
                 row = (await session.execute(stmt)).scalar_one()
                 row.title = result["title"]
                 row.channel_name = result["channel_name"]
+                row.channel_id = result.get("channel_id")
                 row.duration = result["duration"]
                 row.thumbnail_url = result["thumbnail_url"]
                 row.thumbnail_path = thumb_path

@@ -44,10 +44,12 @@ flutter_app/
 │   │   ├── link_tab.dart              # Tab 1: paste YouTube URL, watch progress
 │   │   ├── channel_tab.dart           # Tab 2: coming soon (YouTube channel browsing)
 │   │   ├── downloaded_tab.dart        # Tab 3: browse, filter, sort downloaded tracks
-│   │   └── play_tab.dart              # Tab 4: current track player + subtitle display
+│   │   ├── play_tab.dart              # Tab 4: current track player + subtitle display
+│   │   └── queue_page.dart            # "Up Next" queue: reorder/remove queued tracks
 │   └── widgets/
 │       ├── player_bar.dart            # Persistent bottom player bar (shown in tabs 1–3)
-│       └── scrolling_text.dart        # Single-line, horizontally-scrollable text (long titles)
+│       ├── scrolling_text.dart        # Single-line, horizontally-scrollable text (long titles)
+│       └── video_actions.dart         # Shared menu actions: copy link / open in YouTube / detail sheet
 ├── android/
 │   └── app/src/main/
 │       └── AndroidManifest.xml        # Permissions and audio service config
@@ -76,7 +78,7 @@ flutter_app/
 - Two views in one stateful widget:
   - **Paste view**: a "Paste Channel" button that reads the clipboard. A bare/embedded `UC…` id is used directly (`extractChannelId`); anything else (a `/channel/` URL, `@handle` URL, `/user/`, `/c/`) is resolved to a channel id via `ApiService.resolveChannel()` → `GET /api/channel/resolve`. Below the button is a scrollable list of bookmarked channels (`BookmarkService`, SharedPreferences).
     The paste header is part of the same scroll view as the bookmark list (one `ListView`), so on small screens the header scrolls away instead of permanently occupying the top half.
-  - **Detail view**: lists the channel's latest videos via `ApiService.getChannelVideos(channelId)` (Shorts + members-only already filtered server-side). Back button + a star toggle (AppBar action) to bookmark the channel. Video titles use `ScrollingText`.
+  - **Detail view**: lists the channel's latest videos via `ApiService.getChannelVideos(channelId)` (Shorts + members-only already filtered server-side). Back button + a star toggle (AppBar action) to bookmark the channel. A **search icon** filters the list by title. Video titles use `ScrollingText`. Long-press a video for a context menu: **Download audio**, **Copy YouTube link**, **Open in YouTube**, **Detail**.
 - Tapping a video acts by per-row state (`_RowState`): **none** → start a download; **downloading** → "already downloading"; **downloaded** → play it; **playing** → jump to the Play tab. Trailing icon reflects the state (download / spinner / download_done / equalizer / error). The list rebuilds from `DownloadManager.instance.jobs` so icons update live.
 - Channel thumbnails are direct YouTube CDN URLs, so they need no access token.
 - Not yet implemented: YouTube OAuth login / subscribed-channel browsing.
@@ -86,7 +88,8 @@ flutter_app/
 - Thumbnails load from local files (`Image.file`).
 - Filter dropdown: **All / Unlistened / Listened** (based on `completed_*` SharedPreferences keys).
 - Sort dropdown: by date, channel, or listen status, plus an asc/desc arrow toggle (`_sortAsc`). Re-picking the current sort type or tapping the arrow flips direction; the default is descending (newest-first).
-- Tap a track to play it (local file); long-press for a context menu with **Play Next** and **Delete from device**.
+- A **search icon** in the AppBar expands into a text field that live-filters the list by title.
+- Tap a track to play it (local file); long-press for a context menu: **Add to Queue**, **Copy YouTube link**, **Open in YouTube**, **Open channel** (jumps to the Channel tab on this video's channel — uses the stored `channelId`, else resolves by channel name), **Detail** (scrollable metadata modal with a Close button), **Delete from device**.
 - **Swipe a row left** to delete: the red **Delete** background appears only once the drag passes a ~100px threshold; releasing past it removes the track (with a SnackBar, no confirm dialog), releasing before it snaps back. Implemented with `Dismissible` (`onUpdate` tracks drag progress; `dismissThresholds` ≈ 100px/width).
 - **Play Next** calls `audioHandler.queueNext(video)`.
 - **Delete from device** calls `LocalLibrary.remove(youtubeId)` (removes local files only; the backend copy is untouched).
@@ -95,9 +98,9 @@ flutter_app/
 - Displays current track title, channel, seek bar, and speed control.
 - Speed control cycles through `AudioPlayerHandler.speedSteps` (0.5–2.5×).
 - Subtitles are read from the **local** `.vtt` file (`LocalLibrary.subPath`), parsed into a `SubtitleEntry` list, and shown in a scrollable list below the player.
-- The current subtitle line is highlighted based on `_player.positionStream` and **auto-scrolls** into view (centered) when it changes — a `GlobalKey` on the current line + `Scrollable.ensureVisible`, fired once per line change (`_autoScrolledIndex`).
+- The current subtitle line is highlighted based on `_player.positionStream` and **auto-scrolls** into view — but only when the line has drifted *outside* the viewport (checked via the line's render box vs. the scroll viewport), so it scrolls about a page at a time rather than every line. A `GlobalKey` marks the current line; `_maybeAutoScroll` fires once per line change.
 - Tap any subtitle line to seek to that position.
-- The AppBar title uses `ScrollingText` so long titles scroll horizontally.
+- The AppBar title uses `ScrollingText`; an AppBar **queue** action opens the Up-Next `QueuePage` (also reachable from the queue icon in the player bar).
 
 ---
 
@@ -110,8 +113,9 @@ flutter_app/
   - `playVideo(video)` — plays the **local file** via `_player.setFilePath(LocalLibrary.audioPath(id))` (offline, no token needed), restores saved position, calls `play()`. Sets `opened_*` flag in SharedPreferences. Media-notification art uses the local thumbnail file (`Uri.file`) when present.
   - `skipToNext()` / `skipToPrevious()` — **track navigation** (next/previous item in the playlist). `skipToPrevious` restarts the current track if >3s in. These back the notification + hardware/Bluetooth prev/next buttons.
   - `fastForward()` / `rewind()` — **±30 second seek** (the in-app ±30s buttons and the notification rewind/fast-forward controls).
-  - `queueNext(video)` — stores a video to play immediately after the current track ends, taking priority over `playNextUnplayed()` (used for auto-advance on completion).
-  - `playNextUnplayed()` — smart auto-advance on track end: prefers never-started + not-completed, then in-progress but not-completed, then the first non-current track.
+  - **Up-Next queue** — `addToQueue(video)` (alias `queueNext`) appends to a user-managed FIFO queue exposed as `ValueNotifier<List<Video>> upNext` (named `upNext` to avoid clashing with `BaseAudioHandler.queue`). `removeFromQueue(i)`, `reorderQueue(old,new)`, `clearQueue()` back the Queue page. The queue takes priority over the smart auto-advance.
+  - `playNextUnplayed()` — on track end: plays the front of the `upNext` queue first; when the queue is empty, falls back to smart auto-advance (never-started + not-completed, then in-progress but not-completed, then the first non-current track).
+  - `play()` self-heals: if nothing is loaded (e.g. the service was revived by a media button after the app was killed) it `restoreLastSession()` first, so a hardware/Bluetooth/notification play button starts the last track. Reliability when the process is fully killed is Android/OEM-dependent (best-effort).
   - `speedSteps` — `const List<double>` of valid speed values: `[0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5]`.
   - `setSpeed(speed)` — clamps to 0.5–2.5, sets player speed, and **persists it** (`playback_speed` in SharedPreferences). The saved speed is loaded at startup and re-applied in `playVideo` so every track uses the same speed.
   - `restoreLastSession()` — called at startup (`main.dart`). Reloads the last-played track (`last_played_youtube_id`) at its saved position, **paused** (does not call `play()`), so the app opens showing what was playing and where; the user resumes manually.
@@ -234,6 +238,7 @@ Shown at the bottom of tabs 1–3.
 | `http` | HTTP client for API calls |
 | `provider` | State management (available but minimal use) |
 | `flutter_foreground_task` | Android foreground service keeping downloads alive in the background |
+| `url_launcher` | Opens YouTube links in the YouTube app / browser ("Open in YouTube") |
 
 ---
 

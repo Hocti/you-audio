@@ -6,6 +6,7 @@ import '../services/audio_service.dart';
 import '../services/local_library.dart';
 import '../services/download_manager.dart';
 import '../widgets/scrolling_text.dart';
+import '../widgets/video_actions.dart';
 
 enum SortMode { downloadTime, channel, listenStatus }
 enum FilterMode { all, unlistened, listened }
@@ -13,7 +14,16 @@ enum FilterMode { all, unlistened, listened }
 class DownloadedTab extends StatefulWidget {
   final VoidCallback onPlayTap;
 
-  const DownloadedTab({super.key, required this.onPlayTap});
+  /// Opens the Channel tab on the given channel. Receives a channel id when
+  /// known, otherwise the channel name (resolved by search). Wired by
+  /// MainScaffold to the shared channel-open request.
+  final void Function(String idOrName) onOpenChannel;
+
+  const DownloadedTab({
+    super.key,
+    required this.onPlayTap,
+    required this.onOpenChannel,
+  });
 
   @override
   State<DownloadedTab> createState() => _DownloadedTabState();
@@ -33,6 +43,11 @@ class _DownloadedTabState extends State<DownloadedTab> {
   String? _swipingId;
   double _swipeProgress = 0; // 0..1 fraction of row width for the swiping row
 
+  // Title search: the AppBar shows a text field while _searching is true.
+  bool _searching = false;
+  String _searchQuery = '';
+  final TextEditingController _searchController = TextEditingController();
+
   @override
   void initState() {
     super.initState();
@@ -43,7 +58,20 @@ class _DownloadedTabState extends State<DownloadedTab> {
   @override
   void dispose() {
     DownloadManager.instance.jobs.removeListener(_onJobsChanged);
+    _searchController.dispose();
     super.dispose();
+  }
+
+  void _toggleSearch() {
+    setState(() {
+      if (_searching) {
+        _searching = false;
+        _searchQuery = '';
+        _searchController.clear();
+      } else {
+        _searching = true;
+      }
+    });
   }
 
   // A job finishing adds it to the library and removes itself, so reload.
@@ -113,6 +141,12 @@ class _DownloadedTabState extends State<DownloadedTab> {
   List<LocalVideo> get _displayVideos {
     var list = _videos.toList();
 
+    // Title search filter (case-insensitive).
+    final q = _searchQuery.trim().toLowerCase();
+    if (q.isNotEmpty) {
+      list = list.where((v) => v.title.toLowerCase().contains(q)).toList();
+    }
+
     switch (_filterMode) {
       case FilterMode.unlistened:
         list = list.where((v) => !(_completedMap[v.youtubeId] ?? false)).toList();
@@ -149,32 +183,87 @@ class _DownloadedTabState extends State<DownloadedTab> {
   void _showContextMenu(BuildContext ctx, LocalVideo video) {
     showModalBottomSheet(
       context: ctx,
-      builder: (_) => Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          ListTile(
-            leading: const Icon(Icons.queue_play_next),
-            title: const Text('Play Next'),
-            onTap: () {
-              Navigator.pop(ctx);
-              if (AudioManager.isInitialized) {
-                AudioManager.handler.queueNext(video.toVideo());
-              }
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('"${video.title}" queued next')),
-              );
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.delete_outline),
-            title: const Text('Delete from device'),
-            onTap: () {
-              Navigator.pop(ctx);
-              _deleteVideo(video);
-            },
-          ),
-        ],
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.queue_music),
+              title: const Text('Add to Queue'),
+              onTap: () {
+                Navigator.pop(ctx);
+                if (AudioManager.isInitialized) {
+                  AudioManager.handler.addToQueue(video.toVideo());
+                }
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('"${video.title}" added to queue')),
+                );
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.content_copy),
+              title: const Text('Copy YouTube link'),
+              onTap: () {
+                Navigator.pop(ctx);
+                copyYoutubeLink(context, video.youtubeId);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.open_in_new),
+              title: const Text('Open in YouTube'),
+              onTap: () {
+                Navigator.pop(ctx);
+                openInYouTube(context, video.youtubeId);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.subscriptions_outlined),
+              title: const Text('Open channel'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _openChannel(video);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.info_outline),
+              title: const Text('Detail'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _showDetail(video);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete_outline),
+              title: const Text('Delete from device'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _deleteVideo(video);
+              },
+            ),
+          ],
+        ),
       ),
+    );
+  }
+
+  void _openChannel(LocalVideo video) {
+    final hasId = video.channelId != null && video.channelId!.isNotEmpty;
+    widget.onOpenChannel(hasId ? video.channelId! : video.channel);
+  }
+
+  void _showDetail(LocalVideo video) {
+    showVideoDetailSheet(
+      context,
+      title: video.title,
+      rows: [
+        ('Channel', video.channel),
+        if (video.channelId != null && video.channelId!.isNotEmpty)
+          ('Channel ID', video.channelId!),
+        ('Video ID', video.youtubeId),
+        ('Duration', video.toVideo().durationFormatted),
+        ('Subtitles', video.hasSubtitle ? 'Yes' : 'No'),
+        ('Downloaded', video.downloadedAt.toLocal().toString().split('.').first),
+      ],
     );
   }
 
@@ -234,9 +323,24 @@ class _DownloadedTabState extends State<DownloadedTab> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Downloaded'),
-        centerTitle: true,
+        title: _searching
+            ? TextField(
+                controller: _searchController,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  hintText: 'Filter by title…',
+                  border: InputBorder.none,
+                ),
+                onChanged: (v) => setState(() => _searchQuery = v),
+              )
+            : const Text('Downloaded'),
+        centerTitle: !_searching,
         actions: [
+          IconButton(
+            icon: Icon(_searching ? Icons.close : Icons.search),
+            tooltip: _searching ? 'Close search' : 'Search',
+            onPressed: _toggleSearch,
+          ),
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: () => _load(),

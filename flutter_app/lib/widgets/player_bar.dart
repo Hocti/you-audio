@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
+import '../models/video.dart';
+import '../pages/queue_page.dart';
 import '../services/audio_service.dart';
 import 'scrolling_text.dart';
 
@@ -27,7 +29,7 @@ class PlayerBar extends StatelessWidget {
             color: Theme.of(context).colorScheme.surfaceContainerHigh,
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.3),
+                color: Colors.black.withValues(alpha: 0.3),
                 blurRadius: 8,
                 offset: const Offset(0, -2),
               ),
@@ -111,17 +113,21 @@ class PlayerBar extends StatelessWidget {
                     );
                   },
                 ),
-                // Title (scrolling)
+                // Title (scrolling) + queue shortcut in the corner.
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: ScrollingText(
-                      currentVideo.title,
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                            color: Theme.of(context).colorScheme.onSurface,
-                          ),
-                    ),
+                  padding: const EdgeInsets.only(left: 16),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: ScrollingText(
+                          currentVideo.title,
+                          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                color: Theme.of(context).colorScheme.onSurface,
+                              ),
+                        ),
+                      ),
+                      _QueueButton(handler: handler),
+                    ],
                   ),
                 ),
                 // Controls row
@@ -191,8 +197,30 @@ class PlayerBar extends StatelessWidget {
     final m = d.inMinutes.remainder(60);
     final s = d.inSeconds.remainder(60);
     if (h > 0) {
-      return '${h}:${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
+      return '$h:${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
     }
-    return '${m}:${s.toString().padLeft(2, '0')}';
+    return '$m:${s.toString().padLeft(2, '0')}';
+  }
+}
+
+/// Queue shortcut shown in the player bar; badges the number of queued tracks.
+class _QueueButton extends StatelessWidget {
+  final AudioPlayerHandler handler;
+  const _QueueButton({required this.handler});
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<List<Video>>(
+      valueListenable: handler.upNext,
+      builder: (context, q, _) {
+        final button = IconButton(
+          icon: const Icon(Icons.queue_music),
+          tooltip: 'Up Next',
+          onPressed: () => QueuePage.open(context),
+        );
+        if (q.isEmpty) return button;
+        return Badge.count(count: q.length, child: button);
+      },
+    );
   }
 }

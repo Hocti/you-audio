@@ -18,6 +18,7 @@ class VideoOut(BaseModel):
     youtube_id: str
     title: str | None = None
     channel_name: str | None = None
+    channel_id: str | None = None
     duration: int | None = None
     thumbnail_url: str | None = None
     has_subtitle: bool = False
@@ -47,6 +48,7 @@ class MetadataResponse(BaseModel):
     youtube_id: str
     title: str | None = None
     channel_name: str | None = None
+    channel_id: str | None = None
     duration: int | None = None
     thumbnail_url: str | None = None
     has_thumbnail: bool = False

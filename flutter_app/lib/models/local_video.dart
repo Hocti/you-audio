@@ -8,6 +8,7 @@ class LocalVideo {
   final String youtubeId;
   final String title;
   final String channel;
+  final String? channelId; // UC… id, when known (for "open channel")
   final int duration; // seconds
   final bool hasSubtitle;
   final DateTime downloadedAt;
@@ -19,12 +20,14 @@ class LocalVideo {
     required this.duration,
     required this.hasSubtitle,
     required this.downloadedAt,
+    this.channelId,
   });
 
   Map<String, dynamic> toJson() => {
         'youtube_id': youtubeId,
         'title': title,
         'channel': channel,
+        'channel_id': channelId,
         'duration': duration,
         'has_subtitle': hasSubtitle,
         'downloaded_at': downloadedAt.toIso8601String(),
@@ -34,6 +37,7 @@ class LocalVideo {
         youtubeId: j['youtube_id'] as String? ?? '',
         title: j['title'] as String? ?? 'Unknown',
         channel: j['channel'] as String? ?? 'Unknown',
+        channelId: j['channel_id'] as String?,
         duration: (j['duration'] as num?)?.toInt() ?? 0,
         hasSubtitle: j['has_subtitle'] as bool? ?? false,
         downloadedAt:
@@ -46,6 +50,7 @@ class LocalVideo {
         youtubeId: youtubeId,
         title: title,
         channel: channel,
+        channelId: channelId,
         duration: duration,
         hasSubtitle: hasSubtitle,
       );

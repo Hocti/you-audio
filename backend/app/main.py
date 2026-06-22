@@ -183,6 +183,7 @@ async def metadata(
     # Don't clobber a finished download; only fill in display metadata.
     existing.title = meta.get("title") or existing.title
     existing.channel_name = meta.get("channel_name") or existing.channel_name
+    existing.channel_id = meta.get("channel_id") or existing.channel_id
     existing.duration = meta.get("duration") or existing.duration
     existing.thumbnail_url = meta.get("thumbnail_url") or existing.thumbnail_url
     if meta.get("thumbnail_path"):
@@ -193,6 +194,7 @@ async def metadata(
         youtube_id=video_id,
         title=meta.get("title"),
         channel_name=meta.get("channel_name"),
+        channel_id=meta.get("channel_id"),
         duration=meta.get("duration"),
         thumbnail_url=meta.get("thumbnail_url"),
         has_thumbnail=bool(meta.get("thumbnail_path")),
