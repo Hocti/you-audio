@@ -1,4 +1,4 @@
-package com.example.flutter_app
+package net.teashop.you_audio
 
 import android.content.Intent
 import android.os.Bundle

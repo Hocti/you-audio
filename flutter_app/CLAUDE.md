@@ -130,7 +130,7 @@ flutter_app/
 ### Media Notification
 - Configured in `AudioServiceConfig` inside `AudioManager.init()`.
 - The notification shows **Prev track / −30s / Play-Pause / +30s / Next track** controls (compact view: prev / play-pause / next).
-- Channel ID: `com.example.flutter_app.audio` — change this if you rename the app package.
+- Channel ID: `net.teashop.you_audio.audio` — change this if you rename the app package.
 
 ---
 
@@ -278,7 +278,7 @@ links to `ChannelTab` through a `ValueNotifier<String?> openRequest`.
 ## Common Changes
 
 ### Change the app name
-Edit `android/app/src/main/AndroidManifest.xml`: `android:label="YouTube Audio"`.
+Edit `android/app/src/main/AndroidManifest.xml`: `android:label="You Audio"`.
 
 ### Change the app package name
 1. Rename the package in `AndroidManifest.xml`.
@@ -289,4 +289,4 @@ Edit `android/app/src/main/AndroidManifest.xml`: `android:label="YouTube Audio"`
 Add a new method to `ApiService` in `lib/services/api_service.dart`, following the same pattern as existing methods. Pass the `ApiService` instance from `main_scaffold.dart` down to the widget that needs it.
 
 ### Reset saved state on device
-Clear the app's storage via Android Settings → Apps → YouTube Audio → Storage → Clear Data. This resets the server URL, access token, and all playback positions.
+Clear the app's storage via Android Settings → Apps → You Audio → Storage → Clear Data. This resets the server URL, access token, and all playback positions.

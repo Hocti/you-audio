@@ -113,7 +113,7 @@ class _SettingsTabState extends State<SettingsTab> {
             ),
             const SizedBox(height: 4),
             Text(
-              'Change the URL or access token of your YouTube Audio backend.',
+              'Change the URL or access token of your You Audio backend.',
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                     color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),

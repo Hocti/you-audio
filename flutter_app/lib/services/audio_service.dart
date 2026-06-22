@@ -367,8 +367,8 @@ class AudioManager {
     _handler ??= await AudioService.init(
       builder: () => AudioPlayerHandler(),
       config: const AudioServiceConfig(
-        androidNotificationChannelId: 'com.example.flutter_app.audio',
-        androidNotificationChannelName: 'YouTube Audio',
+        androidNotificationChannelId: 'net.teashop.you_audio.audio',
+        androidNotificationChannelName: 'You Audio',
         androidNotificationOngoing: true,
         androidStopForegroundOnPause: true,
       ),

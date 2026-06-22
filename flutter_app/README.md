@@ -1,4 +1,4 @@
-# YouTube Audio — Flutter App
+# You Audio — Flutter App
 
 An Android audio player that downloads YouTube videos as MP3 from the self-hosted backend.
 

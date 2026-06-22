@@ -93,7 +93,13 @@
       "Bash(timeout 300 flutter build apk --debug)",
       "Bash(timeout 400 flutter build apk --debug)",
       "Bash(pkill -f \"uvicorn app.main:app --host 127.0.0.1 --port 8012\")",
-      "Bash(timeout 580 flutter build apk --debug)"
+      "Bash(timeout 580 flutter build apk --debug)",
+      "Bash(git checkout *)",
+      "Bash(python3 -m py_compile app/main.py app/downloader.py app/youtube_api.py app/schemas.py)",
+      "Bash(python3 -m py_compile app/main.py app/downloader.py app/youtube_api.py app/schemas.py app/models.py)",
+      "Bash(timeout 300 ./gradlew :app:checkDebugAarMetadata --console=plain)",
+      "Bash(flutter config *)",
+      "Bash(flutter clean *)"
     ],
     "additionalDirectories": [
       "/home/hocti/.claude",

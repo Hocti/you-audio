@@ -7,7 +7,13 @@ DATABASE_URL = os.getenv(
     "postgresql+asyncpg://ytaudio:ytaudio@db:5432/ytaudio",
 )
 
-engine = create_async_engine(DATABASE_URL, echo=False, pool_size=5, max_overflow=10)
+if "sqlite" in DATABASE_URL:
+    # SQLite 不支援連線池參數，必須將其移除
+    engine = create_async_engine(DATABASE_URL, echo=False)
+else:
+    # PostgreSQL 則保留原本的優化參數
+    engine = create_async_engine(DATABASE_URL, echo=False, pool_size=5, max_overflow=10)
+
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 

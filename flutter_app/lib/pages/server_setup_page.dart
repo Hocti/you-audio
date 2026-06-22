@@ -104,7 +104,7 @@ class _ServerSetupPageState extends State<ServerSetupPage> {
             ),
             const SizedBox(height: 8),
             Text(
-              'Enter the URL of your YouTube Audio backend server',
+              'Enter the URL of your You Audio backend server',
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                     color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
