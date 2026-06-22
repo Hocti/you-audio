@@ -21,7 +21,62 @@ from .models import Video
 
 logger = logging.getLogger(__name__)
 
+# Languages we ask yt-dlp to fetch.
 _SUBTITLE_LANGS = ["zh", "zh-Hant", "zh-Hans", "zh-TW", "zh-HK", "zh-CN", "en"]
+
+# Subtitle selection priority. Traditional variants are used as-is; the
+# "convertible" group (Simplified, or a bare/ambiguous "zh") is converted to
+# Traditional with chinese-converter; English is the last-resort fallback.
+_SUB_TRADITIONAL = ["zh-Hant", "zh-TW", "zh-HK"]
+_SUB_CONVERTIBLE = ["zh-Hans", "zh-CN", "zh"]
+_SUB_FALLBACK = ["en"]
+
+
+def _find_subtitle(youtube_id: str, langs: list[str]) -> tuple[str, Path] | None:
+    """Return (lang, path) of the first subtitle file present for these langs."""
+    for lang in langs:
+        candidate = AUDIO_DIR / f"{youtube_id}.{lang}.vtt"
+        if candidate.exists():
+            return lang, candidate
+    return None
+
+
+def _convert_subtitle_to_traditional(path: Path) -> None:
+    """Convert a Simplified/ambiguous Chinese .vtt to Traditional in place.
+
+    WebVTT timestamps and cue settings are ASCII, so converting the whole file
+    only affects the Chinese text. Failures are swallowed: a Simplified subtitle
+    is better than none.
+    """
+    try:
+        import chinese_converter
+
+        text = path.read_text(encoding="utf-8")
+        path.write_text(chinese_converter.to_traditional(text), encoding="utf-8")
+        logger.info("Converted subtitle to Traditional Chinese: %s", path.name)
+    except Exception:
+        logger.exception("Subtitle s2t conversion failed for %s (kept original)", path.name)
+
+
+def _select_subtitle(youtube_id: str) -> str | None:
+    """Pick the best subtitle file, converting Simplified/ambiguous to Traditional.
+
+    Preference order: existing Traditional -> convert Simplified/"zh" -> English.
+    """
+    found = _find_subtitle(youtube_id, _SUB_TRADITIONAL)
+    if found:
+        return str(found[1])
+
+    found = _find_subtitle(youtube_id, _SUB_CONVERTIBLE)
+    if found:
+        _convert_subtitle_to_traditional(found[1])
+        return str(found[1])
+
+    found = _find_subtitle(youtube_id, _SUB_FALLBACK)
+    if found:
+        return str(found[1])
+
+    return None
 
 DATA_DIR = Path(os.getenv("DATA_DIR", "/data"))
 AUDIO_DIR = DATA_DIR / "audio"
@@ -160,13 +215,9 @@ def _sync_download(youtube_id: str, task_id: str) -> dict[str, Any]:
     except Exception:
         logger.debug("Subtitle download failed for %s (ignored)", youtube_id)
 
-    # Find subtitle file (prefer Chinese, fallback to English)
-    subtitle_path: str | None = None
-    for lang in _SUBTITLE_LANGS:
-        candidate = AUDIO_DIR / f"{youtube_id}.{lang}.vtt"
-        if candidate.exists():
-            subtitle_path = str(candidate)
-            break
+    # Pick the best subtitle (Traditional as-is, Simplified/"zh" -> Traditional,
+    # English as last resort).
+    subtitle_path: str | None = _select_subtitle(youtube_id)
 
     return {
         "title": info.get("title"),
@@ -177,6 +228,50 @@ def _sync_download(youtube_id: str, task_id: str) -> dict[str, Any]:
         "file_size": file_size,
         "subtitle_path": subtitle_path,
     }
+
+
+# ---------------------------------------------------------------------------
+# Metadata-only extraction (no audio download)
+# ---------------------------------------------------------------------------
+
+def _sync_metadata(youtube_id: str) -> dict[str, Any]:
+    """Quick metadata extraction with no media download (runs in a thread)."""
+    ydl_opts: dict[str, Any] = {
+        "skip_download": True,
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "js_runtimes": {"bun": {}},
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(
+            f"https://www.youtube.com/watch?v={youtube_id}", download=False
+        )
+    return {
+        "title": info.get("title"),
+        "channel_name": info.get("channel") or info.get("uploader"),
+        "duration": info.get("duration"),
+        "thumbnail_url": info.get("thumbnail"),
+    }
+
+
+async def fetch_metadata(youtube_id: str) -> dict[str, Any]:
+    """Extract title/channel/duration/thumbnail and save the thumbnail to disk.
+
+    Returns the metadata dict plus `thumbnail_path` (None if the thumbnail
+    couldn't be fetched). Lets the client show a title + thumbnail before the
+    (slower) audio download even starts.
+    """
+    result = await asyncio.to_thread(_sync_metadata, youtube_id)
+
+    thumb_path: str | None = None
+    if result.get("thumbnail_url"):
+        dest = THUMB_DIR / f"{youtube_id}.jpg"
+        await _download_thumbnail(result["thumbnail_url"], dest)
+        if dest.exists():
+            thumb_path = str(dest)
+    result["thumbnail_path"] = thumb_path
+    return result
 
 
 # ---------------------------------------------------------------------------

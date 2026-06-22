@@ -22,6 +22,42 @@ class ApiService {
   Map<String, String> get authHeaders =>
       accessToken.isEmpty ? const {} : {'X-Access-Token': accessToken};
 
+  /// Result of a /api/health probe used by the Settings "Test" button.
+  /// [reachable] is false if the server couldn't be contacted at all.
+  Future<HealthResult> checkHealth() async {
+    try {
+      final resp = await http
+          .get(Uri.parse('$_base/api/health'), headers: _headers)
+          .timeout(const Duration(seconds: 10));
+      if (resp.statusCode != 200) {
+        return HealthResult(reachable: false, statusCode: resp.statusCode);
+      }
+      final body = jsonDecode(resp.body) as Map<String, dynamic>;
+      return HealthResult(
+        reachable: true,
+        statusCode: 200,
+        tokenRequired: body['token_required'] as bool? ?? false,
+        tokenValid: body['token_valid'] as bool? ?? true,
+      );
+    } catch (e) {
+      return HealthResult(reachable: false, error: e.toString());
+    }
+  }
+
+  /// Fetches title/channel/duration/thumbnail before the audio download starts,
+  /// so an in-progress download can show its real title + art.
+  Future<Map<String, dynamic>> getMetadata(String youtubeUrl) async {
+    final resp = await http.post(
+      Uri.parse('$_base/api/metadata'),
+      headers: _headers,
+      body: jsonEncode({'url': youtubeUrl}),
+    );
+    if (resp.statusCode == 200) {
+      return jsonDecode(resp.body) as Map<String, dynamic>;
+    }
+    throw Exception('Metadata failed: ${resp.statusCode}');
+  }
+
   Future<Map<String, dynamic>> startDownload(String youtubeUrl) async {
     final resp = await http.post(
       Uri.parse('$_base/api/download'),
@@ -147,4 +183,21 @@ class ApiService {
     if (resp.statusCode == 200) return resp.bodyBytes;
     throw Exception('Download failed: ${resp.statusCode}');
   }
+}
+
+/// Outcome of a /api/health probe.
+class HealthResult {
+  final bool reachable;
+  final int? statusCode;
+  final bool tokenRequired;
+  final bool tokenValid;
+  final String? error;
+
+  const HealthResult({
+    required this.reachable,
+    this.statusCode,
+    this.tokenRequired = false,
+    this.tokenValid = true,
+    this.error,
+  });
 }

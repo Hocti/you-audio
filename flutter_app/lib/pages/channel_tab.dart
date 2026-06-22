@@ -7,6 +7,7 @@ import '../services/audio_service.dart';
 import '../services/bookmark_service.dart';
 import '../services/download_manager.dart';
 import '../services/local_library.dart';
+import '../widgets/scrolling_text.dart';
 
 /// Tab 2 — browse a YouTube channel's latest videos.
 ///
@@ -146,93 +147,88 @@ class _ChannelTabState extends State<ChannelTab> {
   }
 
   Widget _buildPasteView(BuildContext context) {
+    // One scroll view: the paste header scrolls away with the bookmark list, so
+    // on small screens the header doesn't permanently occupy the top half.
     return Scaffold(
       appBar: AppBar(title: const Text('Channel'), centerTitle: true),
-      body: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const SizedBox(height: 8),
-            Icon(Icons.subscriptions_outlined, size: 56,
-                color: Theme.of(context).colorScheme.primary),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
+        children: [
+          Icon(Icons.subscriptions_outlined, size: 56,
+              color: Theme.of(context).colorScheme.primary),
+          const SizedBox(height: 12),
+          Text(
+            'Paste a channel ID, a /channel/ URL, or an @handle URL',
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 16),
+          FilledButton.icon(
+            onPressed: _resolving ? null : _pasteChannelId,
+            icon: _resolving
+                ? const SizedBox(
+                    width: 18, height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.content_paste),
+            label: Text(_resolving ? 'Resolving…' : 'Paste Channel'),
+            style: FilledButton.styleFrom(
+              minimumSize: const Size(double.infinity, 52),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+          ),
+          if (_pasteError.isNotEmpty) ...[
             const SizedBox(height: 12),
             Text(
-              'Paste a channel ID, a /channel/ URL, or an @handle URL',
+              _pasteError,
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    color: Theme.of(context).colorScheme.error,
                   ),
               textAlign: TextAlign.center,
             ),
-            const SizedBox(height: 16),
-            FilledButton.icon(
-              onPressed: _resolving ? null : _pasteChannelId,
-              icon: _resolving
-                  ? const SizedBox(
-                      width: 18, height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.content_paste),
-              label: Text(_resolving ? 'Resolving…' : 'Paste Channel'),
-              style: FilledButton.styleFrom(
-                minimumSize: const Size(double.infinity, 52),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-            ),
-            if (_pasteError.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              Text(
-                _pasteError,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: Theme.of(context).colorScheme.error,
-                    ),
-                textAlign: TextAlign.center,
-              ),
-            ],
-            const SizedBox(height: 24),
-            Row(
-              children: [
-                Text('Bookmarked channels',
-                    style: Theme.of(context).textTheme.titleSmall),
-              ],
-            ),
-            const Divider(),
-            Expanded(child: _buildBookmarkList(context)),
           ],
-        ),
+          const SizedBox(height: 24),
+          Text('Bookmarked channels',
+              style: Theme.of(context).textTheme.titleSmall),
+          const Divider(),
+          ..._buildBookmarkItems(context),
+        ],
       ),
     );
   }
 
-  Widget _buildBookmarkList(BuildContext context) {
+  /// Bookmark rows (or an empty-state message) for the scrollable paste view.
+  List<Widget> _buildBookmarkItems(BuildContext context) {
     if (_bookmarks.isEmpty) {
-      return Center(
-        child: Text(
-          'No bookmarks yet.\nOpen a channel and tap the star to save it.',
-          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
-          textAlign: TextAlign.center,
+      return [
+        Padding(
+          padding: const EdgeInsets.only(top: 32),
+          child: Text(
+            'No bookmarks yet.\nOpen a channel and tap the star to save it.',
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+            textAlign: TextAlign.center,
+          ),
         ),
-      );
+      ];
     }
-    return ListView.builder(
-      itemCount: _bookmarks.length,
-      itemBuilder: (context, index) {
-        final bm = _bookmarks[index];
-        return ListTile(
-          leading: const Icon(Icons.star, color: Colors.amber),
-          title: Text(bm.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-          subtitle: Text(bm.id,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.bodySmall),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () => _enterDetail(bm.id, name: bm.name),
-        );
-      },
-    );
+    return _bookmarks.map((bm) {
+      return ListTile(
+        contentPadding: EdgeInsets.zero,
+        leading: const Icon(Icons.star, color: Colors.amber),
+        title: Text(bm.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+        subtitle: Text(bm.id,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.bodySmall),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () => _enterDetail(bm.id, name: bm.name),
+      );
+    }).toList();
   }
 }
 
@@ -526,7 +522,7 @@ class _ChannelDetailViewState extends State<_ChannelDetailView> {
                 ),
         ),
       ),
-      title: Text(video.title, maxLines: 2, overflow: TextOverflow.ellipsis),
+      title: ScrollingText(video.title),
       subtitle: Text(
         state == _RowState.error && job != null
             ? 'Download failed — tap to retry'

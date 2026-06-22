@@ -21,6 +21,7 @@ from .downloader import (
     THUMB_DIR,
     TaskProgress,
     extract_video_id,
+    fetch_metadata,
     get_progress,
     progress_store,
     run_download,
@@ -32,6 +33,7 @@ from .schemas import (
     ChannelVideosResponse,
     DownloadRequest,
     DownloadResponse,
+    MetadataResponse,
     ProgressResponse,
     VideoListResponse,
     VideoOut,
@@ -52,6 +54,13 @@ _ACCESS_TOKEN = os.getenv("ACCESS_TOKEN", "")
 async def _verify_token(x_access_token: str | None = Header(default=None)) -> None:
     if _ACCESS_TOKEN and x_access_token != _ACCESS_TOKEN:
         raise HTTPException(status_code=401, detail="Invalid access token")
+
+
+def _token_is_valid(x_access_token: str | None) -> bool:
+    """Non-raising token check used by /api/health (which never 401s)."""
+    if not _ACCESS_TOKEN:
+        return True
+    return x_access_token == _ACCESS_TOKEN
 
 
 # ---------------------------------------------------------------------------
@@ -139,6 +148,55 @@ async def download(
     asyncio.create_task(run_download(video_id, task_id, video_row.id))
 
     return DownloadResponse(cached=False, task_id=task_id, video=VideoOut.model_validate(video_row))
+
+
+# ---------------------------------------------------------------------------
+# POST /api/metadata  (quick title/channel/duration/thumbnail, no audio)
+# ---------------------------------------------------------------------------
+
+@app.post("/api/metadata", response_model=MetadataResponse)
+async def metadata(
+    body: DownloadRequest,
+    session: AsyncSession = Depends(get_session),
+    _: None = Depends(_verify_token),
+):
+    """Fetch metadata + thumbnail up front so the client can show a title/art
+    before the audio download begins. Upserts a `pending` DB row (leaving any
+    existing `done` row untouched) and saves the thumbnail to disk so
+    `/api/thumbnail/{id}` works immediately."""
+    video_id = extract_video_id(body.url)
+    if not video_id:
+        raise HTTPException(status_code=400, detail="Invalid YouTube URL")
+
+    try:
+        meta = await fetch_metadata(video_id)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Metadata fetch failed: {exc}")
+
+    stmt = select(Video).where(Video.youtube_id == video_id)
+    existing: Video | None = (await session.execute(stmt)).scalar_one_or_none()
+
+    if existing is None:
+        existing = Video(youtube_id=video_id, status="pending")
+        session.add(existing)
+
+    # Don't clobber a finished download; only fill in display metadata.
+    existing.title = meta.get("title") or existing.title
+    existing.channel_name = meta.get("channel_name") or existing.channel_name
+    existing.duration = meta.get("duration") or existing.duration
+    existing.thumbnail_url = meta.get("thumbnail_url") or existing.thumbnail_url
+    if meta.get("thumbnail_path"):
+        existing.thumbnail_path = meta["thumbnail_path"]
+    await session.commit()
+
+    return MetadataResponse(
+        youtube_id=video_id,
+        title=meta.get("title"),
+        channel_name=meta.get("channel_name"),
+        duration=meta.get("duration"),
+        thumbnail_url=meta.get("thumbnail_url"),
+        has_thumbnail=bool(meta.get("thumbnail_path")),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -312,5 +370,14 @@ async def channel_videos(channel_id: str, _: None = Depends(_verify_token)):
 # ---------------------------------------------------------------------------
 
 @app.get("/api/health")
-async def health():
-    return {"status": "ok"}
+async def health(x_access_token: str | None = Header(default=None)):
+    """Health + auth diagnostic.
+
+    Always returns 200 (even with a wrong/missing token) so the app's Settings
+    "Test" button can distinguish "server unreachable" from "token wrong".
+    """
+    return {
+        "status": "ok",
+        "token_required": bool(_ACCESS_TOKEN),
+        "token_valid": _token_is_valid(x_access_token),
+    }

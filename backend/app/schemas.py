@@ -43,6 +43,15 @@ class DownloadResponse(BaseModel):
     video: VideoOut
 
 
+class MetadataResponse(BaseModel):
+    youtube_id: str
+    title: str | None = None
+    channel_name: str | None = None
+    duration: int | None = None
+    thumbnail_url: str | None = None
+    has_thumbnail: bool = False
+
+
 class ProgressResponse(BaseModel):
     task_id: str
     status: str  # pending / downloading / converting / done / error

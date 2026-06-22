@@ -14,9 +14,11 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
   Video? _queuedNext;
   bool _markedCompleted = false;
   double _speed = 1.0; // remembered playback speed, applied to every track
+  int _lastPosSaveMs = 0; // throttles position writes to ~once per 2s
 
   static const List<double> speedSteps = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5];
   static const _speedKey = 'playback_speed';
+  static const _lastPlayedKey = 'last_played_youtube_id';
 
   AudioPlayer get player => _player;
   Video? get currentVideo => _currentVideo;
@@ -50,10 +52,16 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
       }
     });
 
-    // Save position periodically
+    // Save position periodically. positionStream fires sub-second, so throttle
+    // the SharedPreferences write to ~once every 2s (pause/stop still flush the
+    // exact final position immediately).
     _player.positionStream.listen((position) async {
       if (_currentVideo != null && position.inSeconds > 0) {
-        _savePosition(_currentVideo!.youtubeId, position.inSeconds);
+        final now = DateTime.now().millisecondsSinceEpoch;
+        if (now - _lastPosSaveMs >= 2000) {
+          _lastPosSaveMs = now;
+          _savePosition(_currentVideo!.youtubeId, position.inSeconds);
+        }
         final dur = _currentVideo!.duration;
         if (dur > 0 && !_markedCompleted && position.inSeconds / dur >= 0.95) {
           _markedCompleted = true;
@@ -73,6 +81,7 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
     _markedCompleted = false;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('opened_${video.youtubeId}', true);
+    await prefs.setString(_lastPlayedKey, video.youtubeId);
 
     final audioFile = LocalLibrary.audioPath(video.youtubeId);
     final thumbFile = LocalLibrary.thumbPath(video.youtubeId);
@@ -95,6 +104,48 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
     }
 
     await _player.play();
+  }
+
+  /// Reload the last-played track at its saved position, **paused**, so the app
+  /// opens showing what was playing and where, ready to resume on tap. Does not
+  /// start playback. Safe to call at startup; a no-op if nothing was played or
+  /// the file is gone.
+  Future<void> restoreLastSession() async {
+    if (_currentVideo != null) return; // something already loaded
+    final prefs = await SharedPreferences.getInstance();
+    final id = prefs.getString(_lastPlayedKey);
+    if (id == null || id.isEmpty) return;
+
+    await LocalLibrary.ensureInitialized();
+    final lv = LocalLibrary.get(id);
+    if (lv == null) return;
+    final audioFile = LocalLibrary.audioPath(id);
+    if (!File(audioFile).existsSync()) return;
+
+    final video = lv.toVideo();
+    _currentVideo = video;
+    _markedCompleted = false;
+
+    final thumbFile = LocalLibrary.thumbPath(id);
+    mediaItem.add(MediaItem(
+      id: video.youtubeId,
+      title: video.title,
+      artist: video.channel,
+      duration: Duration(seconds: video.duration),
+      artUri: File(thumbFile).existsSync() ? Uri.file(thumbFile) : null,
+    ));
+
+    try {
+      await _player.setFilePath(audioFile);
+      await _player.setSpeed(_speed);
+      final savedPos = await _getSavedPosition(id);
+      if (savedPos > 0 && savedPos < video.duration - 5) {
+        await _player.seek(Duration(seconds: savedPos));
+      }
+    } catch (_) {
+      // Couldn't load the file; leave the metadata showing without audio.
+    }
+    // Intentionally not calling play() — the user resumes manually.
   }
 
   Future<void> _onTrackCompleted() async {

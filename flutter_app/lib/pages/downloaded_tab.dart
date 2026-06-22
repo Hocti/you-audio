@@ -5,6 +5,7 @@ import '../models/local_video.dart';
 import '../services/audio_service.dart';
 import '../services/local_library.dart';
 import '../services/download_manager.dart';
+import '../widgets/scrolling_text.dart';
 
 enum SortMode { downloadTime, channel, listenStatus }
 enum FilterMode { all, unlistened, listened }
@@ -353,22 +354,30 @@ class _DownloadedTabState extends State<DownloadedTab> {
 
   Widget _buildJobTile(DownloadJob job) {
     final isError = job.stage == DownloadStage.error;
+    // The metadata-first flow pulls the thumbnail to the device before the
+    // audio, so show it as soon as it's available.
+    final thumb = job.youtubeId.isEmpty
+        ? null
+        : File(LocalLibrary.thumbPath(job.youtubeId));
+    final hasThumb = thumb != null && thumb.existsSync();
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      leading: SizedBox(
-        width: 80, height: 56,
-        child: Container(
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Icon(isError ? Icons.error_outline : Icons.downloading,
-              color: isError
-                  ? Theme.of(context).colorScheme.error
-                  : Colors.amber),
+      leading: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: SizedBox(
+          width: 80, height: 56,
+          child: hasThumb
+              ? Image.file(thumb, fit: BoxFit.cover)
+              : Container(
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  child: Icon(isError ? Icons.error_outline : Icons.downloading,
+                      color: isError
+                          ? Theme.of(context).colorScheme.error
+                          : Colors.amber),
+                ),
         ),
       ),
-      title: Text(job.title, maxLines: 2, overflow: TextOverflow.ellipsis),
+      title: ScrollingText(job.title),
       subtitle: Text(_stageLabel(job),
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
@@ -415,8 +424,7 @@ class _DownloadedTabState extends State<DownloadedTab> {
                 ),
         ),
       ),
-      title: Text(video.title, maxLines: 2,
-          overflow: TextOverflow.ellipsis,
+      title: ScrollingText(video.title,
           style: TextStyle(
             color: isPlaying ? Theme.of(context).colorScheme.primary : null,
             fontWeight: isPlaying ? FontWeight.bold : null,

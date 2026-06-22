@@ -17,6 +17,8 @@ dependencies:
   cached_network_image: ^3.3.0
   provider: ^6.1.1
   path_provider: ^2.1.0
+  # Keeps downloads alive when the app is backgrounded (Android foreground svc).
+  flutter_foreground_task: ^8.0.0
 
 dev_dependencies:
   flutter_test:

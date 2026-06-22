@@ -10,6 +10,8 @@ Future<void> main() async {
   try {
     await LocalLibrary.ensureInitialized();
     await AudioManager.init();
+    // Restore the last-played track (paused) so the app opens where it left off.
+    await AudioManager.handler.restoreLastSession();
   } catch (e, st) {
     debugPrint('Audio init failed: $e\n$st');
   }

@@ -39,15 +39,28 @@ backend/
 | Method | Path | What it does |
 |--------|------|--------------|
 | POST | `/api/download` | Accept a YouTube URL, check cache, start download |
+| POST | `/api/metadata` | Quick title/channel/duration/thumbnail (no audio); upserts a `pending` row + saves the thumbnail so the client can show it before the audio download |
 | GET | `/api/progress/{task_id}` | Poll download/conversion progress |
 | GET | `/api/audio/{video_id}` | Stream the MP3 file |
 | GET | `/api/thumbnail/{video_id}` | Serve the thumbnail image |
 | GET | `/api/videos` | Return all downloaded videos as JSON |
 | GET | `/api/channel/resolve?q=…` | Resolve a channel ID from a URL / `@handle` / username / id |
-| GET | `/api/channel/{channel_id}/videos` | Return a channel's latest videos (≤50) via YouTube Data API, cached 1h |
-| GET | `/api/health` | Health check — returns `{"status": "ok"}` |
+| GET | `/api/channel/{channel_id}/videos` | Return a channel's latest videos (≤50) via YouTube Data API, cached 1h. Shorts (≤60s) and members-only/private videos are filtered out (see `youtube_api._filter_playable`). |
+| GET | `/api/health` | Health + auth diagnostic — always 200, returns `{"status","token_required","token_valid"}` |
 
 `video_id` in the URL path always means the **YouTube video ID** (11-character string like `dQw4w9WgXcQ`), not the database UUID.
+
+### Access token / auth
+- An `ACCESS_TOKEN` env var enables auth. Every route requires a matching
+  `X-Access-Token` header via `Depends(_verify_token)` (401 on mismatch) — **except**
+  `/api/health`, which never 401s so a client can tell "server down" from "token
+  wrong". Health reports `token_required` and `token_valid` instead.
+
+### Subtitle language handling (`downloader.py`)
+- yt-dlp fetches several Chinese variants + English. `_select_subtitle()` prefers
+  an existing Traditional subtitle (`zh-Hant`/`zh-TW`/`zh-HK`) as-is; otherwise it
+  takes a Simplified or ambiguous bare-`zh` subtitle and converts it to Traditional
+  in place with `chinese-converter` (s2t); English is the last-resort fallback.
 
 ### Database (`app/models.py` + `app/database.py`)
 - One table: **`videos`**

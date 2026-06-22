@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
 import '../services/download_manager.dart';
+import '../services/download_foreground_service.dart';
 import '../services/share_handler.dart';
 import '../widgets/player_bar.dart';
 import 'link_tab.dart';
@@ -44,6 +45,12 @@ class _MainScaffoldState extends State<MainScaffold> {
     // shared channel opens its detail page.
     ShareHandler.instance.init();
     ShareHandler.instance.onShare = _handleShare;
+
+    // Ask for notification permission so the background-download foreground
+    // service can post its ongoing notification (Android 13+).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      DownloadForegroundService.requestPermission();
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final initial = await ShareHandler.instance.getInitial();
       debugPrint('[SHARE] getInitial() returned: ${initial ?? "(null)"}');

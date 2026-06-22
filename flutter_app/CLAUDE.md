@@ -36,6 +36,7 @@ flutter_app/
 │   │   ├── download_manager.dart      # Orchestrates backend convert + pull-to-device
 │   │   ├── bookmark_service.dart      # Bookmarked channels (SharedPreferences) + URL→id
 │   │   ├── share_handler.dart         # OS share-intent bridge + URL classification
+│   │   ├── download_foreground_service.dart # Android foreground svc keeping downloads alive
 │   │   └── audio_service.dart         # Background audio playback logic
 │   ├── pages/
 │   │   ├── server_setup_page.dart     # Setup screen: enter backend URL + access token
@@ -45,7 +46,8 @@ flutter_app/
 │   │   ├── downloaded_tab.dart        # Tab 3: browse, filter, sort downloaded tracks
 │   │   └── play_tab.dart              # Tab 4: current track player + subtitle display
 │   └── widgets/
-│       └── player_bar.dart            # Persistent bottom player bar (shown in tabs 1–3)
+│       ├── player_bar.dart            # Persistent bottom player bar (shown in tabs 1–3)
+│       └── scrolling_text.dart        # Single-line, horizontally-scrollable text (long titles)
 ├── android/
 │   └── app/src/main/
 │       └── AndroidManifest.xml        # Permissions and audio service config
@@ -60,6 +62,7 @@ flutter_app/
 - Shows text fields for the backend URL (e.g. `http://192.168.1.100:8000`) and optional access token.
 - Saves both to `SharedPreferences` under keys `server_url` and `access_token`.
 - On startup, if `server_url` is already saved, skips this page automatically.
+- **Settings tab** (`settings_tab.dart`) has a **Test** button that probes `/api/health` with the *currently entered* URL/token (before saving) and reports reachability + token validity.
 
 ### Main scaffold — `main_scaffold.dart`
 - Hosts the 4-tab `BottomNavigationBar`.
@@ -72,7 +75,8 @@ flutter_app/
 ### Tab 2 — `channel_tab.dart`
 - Two views in one stateful widget:
   - **Paste view**: a "Paste Channel" button that reads the clipboard. A bare/embedded `UC…` id is used directly (`extractChannelId`); anything else (a `/channel/` URL, `@handle` URL, `/user/`, `/c/`) is resolved to a channel id via `ApiService.resolveChannel()` → `GET /api/channel/resolve`. Below the button is a scrollable list of bookmarked channels (`BookmarkService`, SharedPreferences).
-  - **Detail view**: lists the channel's latest videos via `ApiService.getChannelVideos(channelId)`. Back button + a star toggle (AppBar action) to bookmark the channel.
+    The paste header is part of the same scroll view as the bookmark list (one `ListView`), so on small screens the header scrolls away instead of permanently occupying the top half.
+  - **Detail view**: lists the channel's latest videos via `ApiService.getChannelVideos(channelId)` (Shorts + members-only already filtered server-side). Back button + a star toggle (AppBar action) to bookmark the channel. Video titles use `ScrollingText`.
 - Tapping a video acts by per-row state (`_RowState`): **none** → start a download; **downloading** → "already downloading"; **downloaded** → play it; **playing** → jump to the Play tab. Trailing icon reflects the state (download / spinner / download_done / equalizer / error). The list rebuilds from `DownloadManager.instance.jobs` so icons update live.
 - Channel thumbnails are direct YouTube CDN URLs, so they need no access token.
 - Not yet implemented: YouTube OAuth login / subscribed-channel browsing.
@@ -90,9 +94,10 @@ flutter_app/
 ### Tab 4 — `play_tab.dart`
 - Displays current track title, channel, seek bar, and speed control.
 - Speed control cycles through `AudioPlayerHandler.speedSteps` (0.5–2.5×).
-- If the track has subtitles, fetches them via `ApiService.getSubtitleText(youtubeId)`, parses into `SubtitleEntry` list, and displays them in a scrollable list below the player.
-- The current subtitle line is highlighted based on `_player.positionStream`.
+- Subtitles are read from the **local** `.vtt` file (`LocalLibrary.subPath`), parsed into a `SubtitleEntry` list, and shown in a scrollable list below the player.
+- The current subtitle line is highlighted based on `_player.positionStream` and **auto-scrolls** into view (centered) when it changes — a `GlobalKey` on the current line + `Scrollable.ensureVisible`, fired once per line change (`_autoScrolledIndex`).
 - Tap any subtitle line to seek to that position.
+- The AppBar title uses `ScrollingText` so long titles scroll horizontally.
 
 ---
 
@@ -109,7 +114,8 @@ flutter_app/
   - `playNextUnplayed()` — smart auto-advance on track end: prefers never-started + not-completed, then in-progress but not-completed, then the first non-current track.
   - `speedSteps` — `const List<double>` of valid speed values: `[0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5]`.
   - `setSpeed(speed)` — clamps to 0.5–2.5, sets player speed, and **persists it** (`playback_speed` in SharedPreferences). The saved speed is loaded at startup and re-applied in `playVideo` so every track uses the same speed.
-  - Position is saved to SharedPreferences as `progress_{youtubeId}` (integer seconds) on every `positionStream` tick.
+  - `restoreLastSession()` — called at startup (`main.dart`). Reloads the last-played track (`last_played_youtube_id`) at its saved position, **paused** (does not call `play()`), so the app opens showing what was playing and where; the user resumes manually.
+  - Position is saved to SharedPreferences as `progress_{youtubeId}` (integer seconds), throttled to ~once per 2s on the `positionStream` tick (pause/stop flush the exact final position immediately). `last_played_youtube_id` is written in `playVideo`.
   - **Completion tracking**: when playback position reaches 95% of duration, `_markedCompleted` is set to `true` and `completed_{youtubeId}` is written to SharedPreferences. On track end (`ProcessingState.completed`), resets the saved position to 0 and calls `playNextUnplayed()`.
   - `_markedCompleted` — prevents writing the `completed_*` flag multiple times per playback session.
 
@@ -137,13 +143,27 @@ flutter_app/
   (deletes files too).
 
 ### `DownloadManager` (`lib/services/download_manager.dart`)
-- Singleton (`DownloadManager.instance`). `start(api, url)`:
-  POST `/api/download` → poll `/api/progress` until backend `done` → pull
-  `/api/audio` (+ thumbnail + subtitle, with `X-Access-Token`) to local files →
-  `LocalLibrary.addEntry(...)` → remove the job.
+- Singleton (`DownloadManager.instance`). `start(api, url)` is **metadata-first**:
+  1. POST `/api/metadata` → set `job.title` + pull the thumbnail to the device
+     (so the in-progress row shows title + art before the audio downloads).
+  2. POST `/api/download` → poll `/api/progress` until backend `done`.
+  3. Pull `/api/audio` (+ thumbnail + subtitle) to local files →
+     `LocalLibrary.addEntry(...)` → remove the job.
+  If `/api/metadata` is unavailable (older backend) step 1 is skipped and it
+  falls back to the original download-first order.
+- Wraps the whole run in an Android foreground service
+  (`DownloadForegroundService`, see below) so downloads survive backgrounding.
 - Exposes `ValueNotifier<List<DownloadJob>> jobs` (`{id, youtubeId, title, stage,
   percent, error}`); the Downloaded tab rebuilds from it. Failed jobs stay until
   `dismiss(jobId)`. This is the only library-side code that touches the backend.
+
+### `DownloadForegroundService` (`lib/services/download_foreground_service.dart`)
+- Thin wrapper over `flutter_foreground_task`. `DownloadManager` calls
+  `start/update/stop` so an ongoing notification (and thus a foreground service)
+  keeps the app process alive while downloads run in the main isolate. The
+  service holds no logic — it's purely a process-lifetime anchor. Started when the
+  active-job count goes 0→1, stopped when it returns to 0. Notification permission
+  is requested once in `MainScaffold.initState`.
 
 ## API Service (`lib/services/api_service.dart`)
 
@@ -152,6 +172,8 @@ Constructor: `ApiService(serverUrl, {accessToken})`. All methods include `X-Acce
 | Method | HTTP | Path |
 |--------|------|------|
 | `startDownload(url)` | POST | `/api/download` |
+| `getMetadata(url)` | POST | `/api/metadata` (title/channel/duration/thumbnail before audio) |
+| `checkHealth()` | GET | `/api/health` → `HealthResult(reachable, tokenRequired, tokenValid)` for the Settings Test button |
 | `getProgress(taskId)` | GET | `/api/progress/{taskId}` |
 | `getVideos()` | GET | `/api/videos` |
 | `getVideoStatuses()` | GET | `/api/videos` (returns `youtube_id`→status map) |
@@ -211,6 +233,7 @@ Shown at the bottom of tabs 1–3.
 | `shared_preferences` | Stores server URL, access token, and playback state |
 | `http` | HTTP client for API calls |
 | `provider` | State management (available but minimal use) |
+| `flutter_foreground_task` | Android foreground service keeping downloads alive in the background |
 
 ---
 
@@ -240,6 +263,7 @@ links to `ChannelTab` through a `ValueNotifier<String?> openRequest`.
 
 - `android:usesCleartextTraffic="true"` — allows HTTP (not just HTTPS) connections. Required for connecting to the NAS over a local network without a certificate.
 - `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_MEDIA_PLAYBACK` — required for background audio on Android 14+.
+- `FOREGROUND_SERVICE_DATA_SYNC` + `POST_NOTIFICATIONS` and the `com.pravera.flutter_foreground_task.service.ForegroundService` entry — required by `flutter_foreground_task` so downloads continue while the app is backgrounded.
 - The `AudioService` and `MediaButtonReceiver` entries are required by the `audio_service` package.
 - The second `<intent-filter>` on `MainActivity` (`ACTION_SEND` / `text/plain`) puts the app in the OS share sheet; `launchMode="singleTop"` means an in-flight share reaches `onNewIntent` instead of restarting the activity.
 - **`MainActivity` must extend `com.ryanheise.audioservice.AudioServiceActivity`** (see `MainActivity.kt`), not the plain `FlutterActivity`. Otherwise `AudioService.init()` throws `PlatformException("The Activity class declared in your AndroidManifest.xml is wrong…")` and playback silently never starts. `MainActivity` also overrides `configureFlutterEngine` to register the `app/share` MethodChannel.

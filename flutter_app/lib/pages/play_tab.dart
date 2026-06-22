@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../services/audio_service.dart';
 import '../services/local_library.dart';
 import '../models/subtitle_entry.dart';
+import '../widgets/scrolling_text.dart';
 
 class PlayTab extends StatefulWidget {
   const PlayTab({super.key});
@@ -19,6 +20,30 @@ class _PlayTabState extends State<PlayTab> {
   String? _lastLoadedYoutubeId;
   double _currentSpeed = 1.0;
   StreamSubscription<dynamic>? _mediaItemSub;
+
+  // Auto-scroll: a key tracks the currently-highlighted subtitle line so we can
+  // bring it into view; `_autoScrolledIndex` ensures we only scroll once per
+  // line change (not on every position tick).
+  final GlobalKey _currentLineKey = GlobalKey();
+  int _autoScrolledIndex = -1;
+
+  /// Scroll the current subtitle line into view when it changes. Uses the live
+  /// key's context, so it works for sequential playback (the common case); a
+  /// large seek lands on an adjacent line next tick and catches up.
+  void _maybeAutoScroll(int currentIdx) {
+    if (currentIdx < 0 || currentIdx == _autoScrolledIndex) return;
+    _autoScrolledIndex = currentIdx;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctx = _currentLineKey.currentContext;
+      if (ctx == null || !mounted) return;
+      Scrollable.ensureVisible(
+        ctx,
+        alignment: 0.5, // center the line in the viewport
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeInOut,
+      );
+    });
+  }
 
   @override
   void initState() {
@@ -67,6 +92,7 @@ class _PlayTabState extends State<PlayTab> {
           _subtitles = entries;
           _lastLoadedYoutubeId = video.youtubeId;
           _loadingSubtitles = false;
+          _autoScrolledIndex = -1; // re-scroll for the new track
         });
       }
     } catch (_) {
@@ -127,7 +153,7 @@ class _PlayTabState extends State<PlayTab> {
           stream: handler.mediaItem,
           builder: (_, snap) {
             final title = snap.data?.title ?? 'Now Playing';
-            return Text(title, overflow: TextOverflow.ellipsis);
+            return ScrollingText(title);
           },
         ),
         centerTitle: true,
@@ -138,6 +164,7 @@ class _PlayTabState extends State<PlayTab> {
           final position = posSnap.data ?? Duration.zero;
           final duration = player.duration ?? Duration.zero;
           final currentIdx = _currentSubtitleIndex(position);
+          _maybeAutoScroll(currentIdx);
 
           return Column(
             children: [
@@ -239,6 +266,7 @@ class _PlayTabState extends State<PlayTab> {
         final entry = _subtitles[i];
         final isCurrent = i == currentIdx;
         return ListTile(
+          key: isCurrent ? _currentLineKey : null,
           dense: true,
           selected: isCurrent,
           selectedTileColor:

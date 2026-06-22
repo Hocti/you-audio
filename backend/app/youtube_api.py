@@ -84,6 +84,64 @@ def _best_thumbnail(thumbnails: dict) -> str | None:
     return None
 
 
+# Videos at or under this length are treated as Shorts and filtered out.
+# (Heuristic — some Shorts now run longer, but duration is the cheapest signal.)
+_SHORTS_MAX_SECONDS = 60
+
+_ISO8601_DURATION_RE = re.compile(
+    r"P(?:(?P<days>\d+)D)?T?(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?(?:(?P<seconds>\d+)S)?"
+)
+
+
+def _parse_iso8601_duration(value: str | None) -> int | None:
+    """Convert an ISO-8601 duration (e.g. 'PT1M30S') to whole seconds."""
+    if not value:
+        return None
+    m = _ISO8601_DURATION_RE.fullmatch(value)
+    if not m:
+        return None
+    parts = {k: int(v) if v else 0 for k, v in m.groupdict().items()}
+    return parts["days"] * 86400 + parts["hours"] * 3600 + parts["minutes"] * 60 + parts["seconds"]
+
+
+async def _filter_playable(client: httpx.AsyncClient, videos: list[dict]) -> list[dict]:
+    """Drop Shorts and members-only/private videos.
+
+    A batched `videos.list` (1 quota unit) returns `contentDetails.duration` for
+    every accessible video. Videos missing from the response are members-only,
+    private, or deleted (an unauthenticated key can't see them) and are dropped;
+    videos at/under the Shorts length threshold are dropped too.
+    """
+    ids = [v["video_id"] for v in videos if v.get("video_id")]
+    if not ids:
+        return videos
+
+    durations: dict[str, int | None] = {}
+    # videos.list accepts up to 50 ids per call; channel lists are already ≤50.
+    for start in range(0, len(ids), 50):
+        chunk = ids[start : start + 50]
+        data = await _get(
+            client,
+            "videos",
+            {"part": "contentDetails", "id": ",".join(chunk)},
+        )
+        for item in data.get("items", []):
+            durations[item["id"]] = _parse_iso8601_duration(
+                item.get("contentDetails", {}).get("duration")
+            )
+
+    result: list[dict] = []
+    for v in videos:
+        vid = v.get("video_id")
+        if vid not in durations:
+            continue  # members-only / private / deleted -> not accessible
+        secs = durations[vid]
+        if secs is not None and secs <= _SHORTS_MAX_SECONDS:
+            continue  # Short
+        result.append(v)
+    return result
+
+
 async def fetch_latest_videos(channel_id: str) -> list[dict]:
     """Fetch up to MAX_RESULTS latest videos for a channel, using the cache.
 
@@ -106,22 +164,25 @@ async def fetch_latest_videos(channel_id: str) -> list[dict]:
             },
         )
 
-    videos: list[dict] = []
-    for item in data.get("items", []):
-        snippet = item.get("snippet", {})
-        resource = snippet.get("resourceId", {})
-        video_id = resource.get("videoId")
-        if not video_id:
-            continue
-        videos.append(
-            {
-                "video_id": video_id,
-                "title": snippet.get("title"),
-                "published_at": snippet.get("publishedAt"),
-                "thumbnail_url": _best_thumbnail(snippet.get("thumbnails", {})),
-                "channel_name": snippet.get("channelTitle"),
-            }
-        )
+        videos: list[dict] = []
+        for item in data.get("items", []):
+            snippet = item.get("snippet", {})
+            resource = snippet.get("resourceId", {})
+            video_id = resource.get("videoId")
+            if not video_id:
+                continue
+            videos.append(
+                {
+                    "video_id": video_id,
+                    "title": snippet.get("title"),
+                    "published_at": snippet.get("publishedAt"),
+                    "thumbnail_url": _best_thumbnail(snippet.get("thumbnails", {})),
+                    "channel_name": snippet.get("channelTitle"),
+                }
+            )
+
+        # Drop Shorts and members-only/private videos.
+        videos = await _filter_playable(client, videos)
 
     _channel_cache[channel_id] = (time.time(), videos)
     return videos
