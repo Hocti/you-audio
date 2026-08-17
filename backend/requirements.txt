@@ -1,18 +1,33 @@
+# These four floors exist so every dependency installs from a **wheel** on
+# Python 3.13 (what a current local machine runs; the Docker image is 3.11).
+# Below them, pip finds no cp313 wheel and falls back to building from source:
+# asyncpg needs a C toolchain and pydantic-core needs Rust, and both fail with
+# "Failed building wheel". Raise them, never lower them.
+#   asyncpg   — first cp313 wheel: 0.30.0
+#   pydantic  — 2.7.x pins pydantic-core 2.18.4, whose first cp313 wheel is 2.20
+#               (pydantic 2.8.x); 2.8.2 is the lowest version that installs.
 fastapi==0.111.0
 uvicorn[standard]==0.30.1
 sqlalchemy[asyncio]==2.0.31
-asyncpg==0.29.0
-pydantic==2.7.4
+asyncpg==0.31.0
+pydantic==2.8.2
 pydantic-settings==2.3.4
 # yt-dlp must stay current — YouTube changes its URL signing every few months,
 # and a stale version causes HTTP 403 Forbidden on downloads. This is only the
 # build-time baseline; entrypoint.sh upgrades yt-dlp + yt-dlp-ejs to latest on
 # every container start. yt-dlp-ejs bundles the JS challenge solver used with bun.
+#
+# Note the two use *different* versioning schemes: yt-dlp is date-based
+# (2026.7.4) while yt-dlp-ejs is semver (0.8.0). Pinning yt-dlp-ejs to a date
+# makes it unresolvable and breaks the whole image build.
 yt-dlp>=2026.6.9
-yt-dlp-ejs>=2026.6.9
+yt-dlp-ejs>=0.8.0
 python-multipart==0.0.9
 aiofiles==24.1.0
 httpx==0.27.0
 aiosqlite
 # Simplified->Traditional Chinese conversion for subtitles (s2t).
 chinese-converter==1.1.1
+# Test-only (not needed at runtime, but pinned for `pytest` in backend/tests).
+pytest==9.1.0
+pytest-asyncio==1.3.0

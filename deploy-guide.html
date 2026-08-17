@@ -1,0 +1,492 @@
+<title>You Audio 部署手冊</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1a1a1a;
+    --dim: #555555;
+    --rule: #d4d4d4;
+    --box: #f4f4f4;
+    --code-bg: #f0f0f0;
+    --danger: #b3261e;
+    --danger-bg: #fbeae8;
+    --caution: #7a5c00;
+    --caution-bg: #fbf3dc;
+    --ok: #1c6640;
+    --ok-bg: #e6f1ea;
+    --link: #0b5cad;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #16191a;
+      --fg: #e6e6e6;
+      --dim: #a8a8a8;
+      --rule: #3a3f40;
+      --box: #202426;
+      --code-bg: #0f1213;
+      --danger: #f08b7c;
+      --danger-bg: #331916;
+      --caution: #d9b45c;
+      --caution-bg: #2c2512;
+      --ok: #74c396;
+      --ok-bg: #16291e;
+      --link: #6cb6f5;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #16191a;
+    --fg: #e6e6e6;
+    --dim: #a8a8a8;
+    --rule: #3a3f40;
+    --box: #202426;
+    --code-bg: #0f1213;
+    --danger: #f08b7c;
+    --danger-bg: #331916;
+    --caution: #d9b45c;
+    --caution-bg: #2c2512;
+    --ok: #74c396;
+    --ok-bg: #16291e;
+    --link: #6cb6f5;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, "PingFang TC", "Noto Sans TC",
+                 "Microsoft JhengHei", Arial, sans-serif;
+    line-height: 1.7;
+    max-width: 46rem;
+    margin: 0 auto;
+    padding: 2rem 1.25rem 5rem;
+  }
+
+  h1 { font-size: 1.8rem; margin: 0 0 0.5rem; }
+  h2 {
+    font-size: 1.4rem;
+    margin: 3rem 0 0.75rem;
+    padding-top: 1rem;
+    border-top: 2px solid var(--fg);
+  }
+  h3 { font-size: 1.1rem; margin: 2rem 0 0.5rem; }
+  p { margin: 0.8rem 0; }
+  a { color: var(--link); }
+
+  code {
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 0.88em;
+    background: var(--code-bg);
+    padding: 0.1em 0.3em;
+    border-radius: 3px;
+    word-break: break-word;
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--rule);
+    border-radius: 0 0 4px 4px;
+    padding: 0.7rem 0.9rem;
+    margin: 0;
+    overflow-x: auto;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 0.85rem;
+    line-height: 1.6;
+  }
+  pre .c { color: var(--dim); }
+
+  /* 每個指令方塊都標明喺邊部機執行 */
+  .cmd { margin: 0.9rem 0; }
+  .cmd .at {
+    background: var(--box);
+    border: 1px solid var(--rule);
+    border-bottom: none;
+    border-radius: 4px 4px 0 0;
+    padding: 0.25rem 0.9rem;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 0.78rem;
+    color: var(--dim);
+  }
+  .cmd .at b { color: var(--fg); }
+
+  .note {
+    margin: 1.2rem 0;
+    padding: 0.8rem 1rem;
+    border-left: 4px solid var(--rule);
+    background: var(--box);
+  }
+  .note > :first-child { margin-top: 0; }
+  .note > :last-child { margin-bottom: 0; }
+  .note b.lbl { display: block; margin-bottom: 0.3rem; }
+  .note.danger  { border-left-color: var(--danger);  background: var(--danger-bg); }
+  .note.danger b.lbl { color: var(--danger); }
+  .note.caution { border-left-color: var(--caution); background: var(--caution-bg); }
+  .note.caution b.lbl { color: var(--caution); }
+  .note.ok      { border-left-color: var(--ok);      background: var(--ok-bg); }
+  .note.ok b.lbl { color: var(--ok); }
+
+  ol.steps > li { margin-bottom: 1.4rem; }
+  ul { margin: 0.6rem 0 0.6rem 1.2rem; padding: 0; }
+  li { margin: 0.25rem 0; }
+
+  .tw { overflow-x: auto; margin: 1.2rem 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.9rem; min-width: 30rem; }
+  th, td { text-align: left; padding: 0.45rem 0.7rem; border: 1px solid var(--rule); vertical-align: top; }
+  th { background: var(--box); }
+
+  footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--rule); color: var(--dim); font-size: 0.85rem; }
+</style>
+
+<h1>You Audio 部署手冊</h1>
+<p>三件事：更新手機 app、喺本機開 backend 試、更新 NAS 上嘅 backend 而唔搞爛資料。</p>
+
+<ul>
+  <li><a href="#app">A. 更新手機 app（USB）</a></li>
+  <li><a href="#local">B. 本機開 backend 試</a></li>
+  <li><a href="#nas">C. 更新 NAS Docker backend</a></li>
+  <li><a href="#ref">D. 速查 + 更新前檢查表</a></li>
+</ul>
+
+
+<h2 id="app">A. 更新手機 app（USB 直連）</h2>
+
+<p>用 build version 推新版本落 USB 直連嘅 Android。同一部電腦、同一個 package build 出嚟嘅 APK 會直接覆蓋安裝，設定同已下載音檔全部保留。</p>
+
+<div class="note ok">
+  <b class="lbl">版本號已經自動化</b>
+  <p><code>build.gradle</code> 已改成讀 <code>pubspec.yaml</code> 嘅 <code>version: X.Y.Z+N</code>（<code>+</code> 後面就係 Android versionCode），而 <code>make apk</code> / <code>make install</code> <b>每次 build 之前都會自動升</b> —— <code>1.1.1+3</code> → <code>1.1.2+4</code>。唔需要再手改版本號。</p>
+  <p>實測驗證過：pubspec <code>1.1.1+3</code> build 出嚟嘅 APK 係 <code>versionCode=3 versionName=1.1.1</code>。</p>
+</div>
+
+<ol class="steps">
+  <li>
+    <b>開手機嘅 USB 除錯。</b>
+    設定 → 關於手機 → 連按 7 次「版本號碼」→ 返設定 → 系統 → 開發者選項 → 開 <b>USB 除錯</b>。駁線後手機會彈「允許 USB 除錯嗎？」，要按<b>允許</b>。
+  </li>
+
+  <li>
+    <b>確認電腦見到部機。</b>
+    <div class="cmd">
+      <div class="at"><b>電腦</b> · 任何目錄</div>
+      <pre>adb devices
+flutter devices</pre>
+    </div>
+    <code>adb devices</code> 要見到一行 device（唔係 <code>unauthorized</code>、唔係空白）。空白就：換線、換 USB 口、手機通知欄嘅 USB 模式揀「檔案傳輸／MTP」，再 <code>adb kill-server &amp;&amp; adb devices</code>。
+  </li>
+
+  <li>
+    <b>升版號 + build + 裝，一句過。</b>
+    <div class="cmd">
+      <div class="at"><b>電腦</b> · youtube-audio/flutter_app</div>
+      <pre>cd flutter_app
+make install</pre>
+    </div>
+    <code>make install</code> 做三件事：<code>tool/bump_version.sh</code> 升 pubspec 版號 → <code>flutter build apk --release</code> → <code>adb install -r</code>。<code>-r</code> 就係「覆蓋安裝、保留資料」。
+    <div class="tw">
+      <table>
+        <tr><th>指令</th><th>做咩</th></tr>
+        <tr><td><code>make version</code></td><td>睇現時版號</td></tr>
+        <tr><td><code>make bump</code></td><td>只升版號，唔 build（<code>1.1.1+3</code> → <code>1.1.2+4</code>）</td></tr>
+        <tr><td><code>make apk</code></td><td>升版號 + build，唔裝（想留 APK 檔俾其他機）</td></tr>
+        <tr><td><code>make install</code></td><td>升版號 + build + 裝落 USB 部機</td></tr>
+        <tr><td><code>make run</code></td><td>邊跑邊睇 log，<b>唔</b>升版號</td></tr>
+      </table>
+    </div>
+    <div class="note danger">
+      <b class="lbl">唔好用 <code>flutter install</code></b>
+      <p>佢<b>唔會 build</b>。查過 flutter tool 原始碼（<code>android/application_package.dart</code>）：見到 <code>app-release.apk</code> 已經存在，就直接讀嗰個舊檔嘅資料然後裝落機 —— 你改嘅 code 根本冇入去。一定要先 <code>flutter build apk</code>。</p>
+    </div>
+  </li>
+
+  <li>
+    <b>確認裝到新版。</b>
+    <div class="cmd">
+      <div class="at"><b>電腦</b> · 任何目錄</div>
+      <pre>adb shell dumpsys package net.teashop.you_audio | grep -E "versionCode|versionName"</pre>
+    </div>
+    <code>versionCode</code> 應該同 <code>make version</code> 顯示嘅 <code>+N</code> 一樣。想直接驗 APK 檔本身：
+    <div class="cmd">
+      <div class="at"><b>電腦</b> · youtube-audio/flutter_app</div>
+      <pre>$ANDROID_HOME/build-tools/35.0.0/aapt dump badging \
+  build/app/outputs/flutter-apk/app-release.apk | head -1</pre>
+    </div>
+  </li>
+</ol>
+
+<h3>裝唔到嘅時候</h3>
+<div class="tw">
+<table>
+  <tr><th>錯誤</th><th>意思</th><th>做法</th></tr>
+  <tr><td><code>INSTALL_FAILED_VERSION_DOWNGRADE</code></td><td>新 APK 嘅 versionCode 比機上細</td><td>升高 <code>versionCode</code> 再 build</td></tr>
+  <tr><td><code>INSTALL_FAILED_UPDATE_INCOMPATIBLE</code><br><code>signatures do not match</code></td><td>簽名唔同（見下面）</td><td>要先反安裝，會清資料</td></tr>
+  <tr><td><code>no devices found</code></td><td>adb 見唔到部機</td><td>回第 2 步</td></tr>
+</table>
+</div>
+
+<div class="note danger">
+  <b class="lbl">簽名陷阱 — 換電腦會清光資料</b>
+  <p><code>build.gradle</code> 嘅 release build 用 <code>signingConfigs.debug</code>，即係用 <code>~/.android/debug.keystore</code> 簽名，而<b>呢個 keystore 每部電腦都唔同</b>。</p>
+  <ul>
+    <li><b>同一部電腦</b> build → 簽名一樣 → 覆蓋安裝，資料全保留。</li>
+    <li><b>換咗電腦</b>（或重裝系統、刪過 <code>~/.android</code>）→ 簽名唔同 → Android 拒絕覆蓋，一定要 <code>adb uninstall net.teashop.you_audio</code>，而咁做會<b>清走 server URL、token、播放進度、以及所有已下載嘅音檔同字幕</b>。</li>
+  </ul>
+  <p>避免方法：永遠喺同一部機出 build，並且 backup <code>~/.android/debug.keystore</code>；或者建立一個固定嘅 release keystore。</p>
+</div>
+
+<div class="note ok">
+  <b class="lbl">正常更新會保留</b>
+  <p>Server URL 同 token、每首歌嘅播放進度／已聽標記、字幕自動 scroll 開關、書籤頻道（全部喺 SharedPreferences），加上 <code>library/</code> 底下嘅 mp3／縮圖／字幕檔 —— 覆蓋安裝一律唔會動。</p>
+</div>
+
+
+<h2 id="local">B. 本機開 backend 試</h2>
+
+<p><code>make run</code> 用 SQLite 同本機資料夾，完全唔會碰 NAS 上嘅 Postgres 同音檔 —— 兩個獨立資料庫，隨便試。</p>
+
+<ol class="steps">
+  <li>
+    <b>裝好依賴。</b>本機模式唔用 Docker，所以 <b>Python 3.11+ 同 ffmpeg</b> 要自己有。
+    <div class="cmd">
+      <div class="at"><b>電腦</b> · youtube-audio/backend</div>
+      <pre>cd backend
+make venv                   <span class="c"># 一次性：建 .venv 並裝好依賴</span>
+ffmpeg -version | head -1   <span class="c"># 確認 ffmpeg 裝好</span></pre>
+    </div>
+    <p><code>make venv</code> 之後，<code>make run</code> 同 <code>make test</code> 會自動用 <code>.venv</code>（Makefile 見到 <code>.venv/bin/python</code> 存在就用佢，冇就用 <code>python3</code>）。</p>
+    <div class="note danger">
+      <b class="lbl">唔好裝入 conda base</b>
+      <p>將 server 依賴 <code>pip install</code> 入一個共用環境（例如有 gradio 嘅 conda base），兩邊會爭 fastapi／starlette／python-multipart 嘅版本。pip 會照裝，但同時<b>靜靜雞搞壞另一邊</b>：</p>
+      <pre>gradio 6.15.2 requires fastapi&lt;1.0,&gt;=0.115.2, but you have fastapi 0.111.0</pre>
+      <p>呢句係<b>安裝成功之後</b>嘅衝突報告，唔係安裝失敗。但意思係 gradio 而家壞了。用 <code>make venv</code> 隔離，然後喺 base 執行 <code>pip install -U gradio</code> 修返 gradio。</p>
+    </div>
+    <div class="note caution">
+      <b class="lbl">兩個已修好嘅 <code>requirements.txt</code> 問題</b>
+      <ul>
+        <li><code>No matching distribution found for yt-dlp-ejs</code> — <code>yt-dlp-ejs</code> 用 semver（最新 <code>0.8.0</code>），唔係 <code>yt-dlp</code> 嘅日期版本號，所以舊寫法 <code>&gt;=2026.6.9</code> 永遠解析唔到。呢個亦會令 <b>Docker image build 失敗</b>。</li>
+        <li><code>Failed building wheel for pydantic-core / asyncpg</code> — Python 3.13 冇對應 wheel，pip 退回由 source 編譯（要 Rust／C toolchain）就爆。已升 <code>asyncpg==0.31.0</code>、<code>pydantic==2.8.2</code>（各自第一個有 cp313 wheel 嘅版本）。</li>
+      </ul>
+      <p>兩個都 <code>git pull</code> 就有。更新 NAS 之前一定要有呢兩個修正。</p>
+    </div>
+  </li>
+
+  <li>
+    <b>準備 .env。</b><code>make run</code> 會從 <code>.env</code> 撈 <code>YOUTUBE_API_KEY</code>（頻道功能要用）。冇就由範本複製：
+    <div class="cmd">
+      <div class="at"><b>電腦</b> · youtube-audio/backend</div>
+      <pre>cp .env.example .env
+<span class="c"># 然後編輯 .env，填 YOUTUBE_API_KEY</span></pre>
+    </div>
+  </li>
+
+  <li>
+    <b>開機。</b>
+    <div class="cmd">
+      <div class="at"><b>電腦</b> · youtube-audio/backend</div>
+      <pre>make run</pre>
+    </div>
+    會由 <code>.env</code> 讀 <code>ACCESS_TOKEN</code> 同 <code>YOUTUBE_API_KEY</code>，用 SQLite <code>./ytaudio.db</code>、檔案放 <code>./data</code>、聽 <code>0.0.0.0:8000</code>，並且 <code>--reload</code>（改 code 自動重啟）。Ctrl-C 收工。App Settings 入嘅 token 就係 <code>.env</code> 裡面嗰個。
+    <div class="note ok">
+      <b class="lbl">改 .env 個 token 就會生效</b>
+      <p><code>ACCESS_TOKEN</code> 而家係<b>權威</b>：每次開機都會令 <code>admin</code> 用戶嘅 token 對齊 <code>.env</code>（唔存在就建，唔一樣就改）。所以改完 <code>.env</code> 重啟就得，唔需要碰資料庫。</p>
+      <p>以前係「已存在就永不覆蓋」，結果一旦冇帶 <code>ACCESS_TOKEN</code> 開過一次機，就會卡死喺一個隨機 token（log 印過嗰個），之後點設 <code>.env</code> 都無效 —— 呢個已經修好。</p>
+      <p><code>.env</code> 留空 <code>ACCESS_TOKEN</code> 嘅話，第一次開機會隨機生成並印喺畫面，之後唔會再變：</p>
+      <pre>WARNING  Seeded default admin user with generated token: xxxxxxxxxxxx</pre>
+    </div>
+  </li>
+
+  <li>
+    <b>驗證。</b>
+    <div class="cmd">
+      <div class="at"><b>電腦</b> · 另開一個 terminal</div>
+      <pre>TOKEN=$(grep -E '^ACCESS_TOKEN=' .env | cut -d= -f2-)
+curl http://localhost:8000/api/health
+curl -H "X-Access-Token: $TOKEN" http://localhost:8000/api/yt-dlp/version
+curl -H "X-Access-Token: $TOKEN" http://localhost:8000/api/videos | head -c 200</pre>
+    </div>
+    第一句永遠 200，<code>token_valid</code> 話你 token 對唔對。第二句報 backend 實際載入緊嘅 yt-dlp 版本。第三句應該列得出已下載嘅片；如果 500 就睇一睇 log 有冇 <code>no such column</code>（正常情況下開機會自動補欄位）。
+  </li>
+
+  <li>
+    <b>用手機連本機。</b>手機唔識 <code>localhost</code>，要用電腦內網 IP，兩邊同一個 Wi-Fi。
+    <div class="cmd">
+      <div class="at"><b>電腦</b> · 拎內網 IP</div>
+      <pre>hostname -I | awk '{print $1}'</pre>
+    </div>
+    喺 app Settings 入 <code>http://192.168.x.x:8000</code> 同 token，撳 <b>Test</b> 掣驗證。App 已准許 cleartext HTTP，唔需要 HTTPS。連唔到就檢查電腦防火牆放唔放 8000。
+  </li>
+
+  <li>
+    <b>跑測試（改過 code 就跑）。</b>
+    <div class="cmd">
+      <div class="at"><b>電腦</b> · youtube-audio/backend</div>
+      <pre>python -m pytest -q</pre>
+    </div>
+    用臨時 SQLite，唔會影響 <code>ytaudio.db</code>。
+  </li>
+</ol>
+
+
+<h2 id="nas">C. 更新 NAS Docker backend（保留資料）</h2>
+
+<p>資料庫同已下載音檔住喺兩個 <b>named volume</b>（<code>pgdata</code> 同 <code>ytdata</code>）。只要唔刪 volume，重建 image 同重啟 container 都唔會掉資料。</p>
+
+<div class="note danger">
+  <b class="lbl">絕對唔可以做</b>
+  <ul>
+    <li><code>docker compose down <b>-v</b></code> — <code>-v</code> 就係「連 volume 一齊刪」，音檔同資料庫即時清光。要停就用<b>冇</b> <code>-v</code> 嘅 <code>docker compose down</code>。</li>
+    <li><code>docker volume rm ...</code> 或 <code>docker system prune <b>--volumes</b></code>。</li>
+    <li>喺 Container Manager 刪 Project 時勾「同時刪除 volume／資料」。</li>
+  </ul>
+</div>
+
+<div class="note danger">
+  <b class="lbl">今次更新有 breaking change：驗證由「無」變「必須」</b>
+  <p>舊版只喺 <code>ACCESS_TOKEN</code> 非空時才檢查 token，而 <code>docker-compose.yml</code> 現時係 <code>ACCESS_TOKEN: ""</code> —— 即係<b>而家根本冇驗證</b>。新版<b>每個</b> request 都要一個對得上 <code>users</code> 表嘅 token（只有 <code>/api/health</code> 例外）。</p>
+  <p>唔理嘅話，更新完 app 會全部 <b>401</b>。所以<b>更新前</b>要喺 <code>docker-compose.yml</code> 填好 token（第 3 步），再喺 app Settings 入同一個。</p>
+  <p>好消息：<code>ACCESS_TOKEN</code> 而家係<b>權威</b>，每次開機都會令 admin 嘅 token 對齊。即係萬一你已經用空 token 開過機、admin 拎咗個隨機 token，只要填好 <code>ACCESS_TOKEN</code> 再 <code>docker compose up -d</code> 就會改返，唔需要進 DB 改。</p>
+</div>
+
+<ol class="steps">
+  <li>
+    <b>先備份（唔准跳）。</b>
+    <div class="cmd">
+      <div class="at"><b>NAS</b> · SSH · project 目錄</div>
+      <pre>cd /volume1/docker/youtube-audio-backend
+docker compose exec -T db pg_dump -U ytaudio ytaudio > ~/ytaudio-db-$(date +%F).sql
+ls -lh ~/ytaudio-db-*.sql</pre>
+    </div>
+    音檔喺 volume 度，重建 image 唔會影響佢；想連檔一齊備份就 tar 走個 volume：
+    <div class="cmd">
+      <div class="at"><b>NAS</b> · SSH · 選擇性、可能好大</div>
+      <pre>docker volume ls | grep ytdata   <span class="c"># 先確認實際 volume 名</span>
+sudo tar czf ~/ytdata-$(date +%F).tar.gz \
+  -C /volume1/@docker/volumes/youtube-audio-backend_ytdata/_data .</pre>
+    </div>
+    <div class="note caution">
+      <b class="lbl">Volume 名點嚟</b>
+      <p>Docker 用<b>目錄名</b>做 project 前綴，所以真名可能係 <code>backend_ytdata</code>、<code>youtube-audio-backend_ytdata</code> 或其他。永遠用 <code>docker volume ls</code> 睇實際名，唔好照抄。</p>
+    </div>
+  </li>
+
+  <li>
+    <b>更新原始碼。</b>如果 NAS 上係 git clone：
+    <div class="cmd">
+      <div class="at"><b>NAS</b> · SSH · project 目錄</div>
+      <pre>git pull</pre>
+    </div>
+    如果係用 scp／File Station 傳上去，就喺你電腦 push 新版，<b>但唔好覆蓋 <code>docker-compose.yml</code></b>（嗰個檔有你 NAS 專屬設定）：
+    <div class="cmd">
+      <div class="at"><b>電腦</b> · youtube-audio</div>
+      <pre>scp -r backend/app backend/requirements.txt \
+    backend/Dockerfile backend/entrypoint.sh \
+    你嘅帳號@NAS_IP:/volume1/docker/youtube-audio-backend/</pre>
+    </div>
+  </li>
+
+  <li>
+    <b>補齊環境變數。</b><code>docker-compose.yml</code> 嘅 <code>backend</code> 服務要有以下四個。<code>ACCESS_TOKEN</code> 見上面嘅 breaking change；<code>YOUTUBE_API_KEY</code> <b>目前完全冇喺 compose 檔裡面</b>，冇佢頻道瀏覽會 500。
+    <div class="cmd">
+      <div class="at"><b>編輯</b> · NAS 上嘅 docker-compose.yml</div>
+      <pre>environment:
+  DATABASE_URL: "postgresql+asyncpg://ytaudio:ytaudio@db:5432/ytaudio"
+  DATA_DIR: "/data"
+  ACCESS_TOKEN: "填一個你自己嘅長密碼"   <span class="c"># 只喺第一次 seed admin 時用</span>
+  YOUTUBE_API_KEY: "你嘅 YouTube Data API v3 key"</pre>
+    </div>
+  </li>
+
+  <li>
+    <b>重建同重啟。</b>
+    <div class="cmd">
+      <div class="at"><b>NAS</b> · SSH · project 目錄</div>
+      <pre>docker compose build backend
+docker compose up -d</pre>
+    </div>
+    <code>up -d</code> 只重建有改動嘅 container，<b>volume 原封不動</b>。Postgres 個 container 通常連重啟都唔需要。
+  </li>
+
+  <li>
+    <b>確認資料庫欄位補齊（現在自動）。</b>
+    <code>create_all</code> 只會建<b>新表</b>（<code>users</code>、<code>requests</code> 會自動出現），<b>唔會</b>幫已存在嘅表加新 column —— 所以舊 DB 一升級，<code>/api/videos</code> 就會 500 話 <code>no such column: videos.channel_id</code>。現在開機會自動跑 <code>ensure_columns()</code> 補齊，log 會見到：
+    <pre>WARNING  Added missing column videos.channel_id</pre>
+    要親自核對：
+    <div class="cmd">
+      <div class="at"><b>NAS</b> · SSH · project 目錄</div>
+      <pre>docker compose exec -T db psql -U ytaudio -d ytaudio -c "\d videos"</pre>
+    </div>
+    萬一自動補失敗，手動嗰句係（Postgres 版本；SQLite 唔支援 <code>IF NOT EXISTS</code>）：
+    <div class="cmd">
+      <div class="at"><b>NAS</b> · SSH · 只在需要時</div>
+      <pre>docker compose exec -T db psql -U ytaudio -d ytaudio \
+  -c "ALTER TABLE videos ADD COLUMN IF NOT EXISTS channel_id TEXT;"</pre>
+    </div>
+  </li>
+
+  <li>
+    <b>睇 log 確認。</b>
+    <div class="cmd">
+      <div class="at"><b>NAS</b> · SSH · project 目錄</div>
+      <pre>docker compose logs -f backend</pre>
+    </div>
+    要見到 <code>[entrypoint] Upgrading yt-dlp to latest...</code>、<code>[entrypoint] yt-dlp 2026.xx.xx</code>、<code>Database tables ensured.</code>。如果 <code>ACCESS_TOKEN</code> 留空，呢度會印出隨機生成嘅 admin token —— 抄咗佢入 app。
+  </li>
+
+  <li>
+    <b>驗證舊資料仲在。</b>
+    <div class="cmd">
+      <div class="at"><b>電腦</b> · 換成你嘅 NAS IP 同 token</div>
+      <pre>curl http://NAS_IP:8000/api/health
+curl -H "X-Access-Token: 你嘅token" http://NAS_IP:8000/api/videos | head -c 400
+curl -H "X-Access-Token: 你嘅token" http://NAS_IP:8000/api/yt-dlp/version</pre>
+    </div>
+    <code>/api/videos</code> 要仍然列出更新前嗰批片。之後開 app 撳 Settings 嘅 <b>Test</b> 掣做最後確認。
+  </li>
+</ol>
+
+<h3>更新後想單獨升 yt-dlp</h3>
+<p>唔需要再重啟容器 —— 新增咗一個 admin 專用 endpoint，一 call 就升級並熱重載：</p>
+<div class="cmd">
+  <div class="at"><b>瀏覽器或 curl</b> · 要 admin token</div>
+  <pre>curl -H "X-Access-Token: 你嘅admin token" http://NAS_IP:8000/api/yt-dlp/update</pre>
+</div>
+<p>回覆會有 <code>previous_version</code>、<code>current_version</code>、<code>reloaded</code>。如果當時有下載進行中，重載會延後並回 <code>restart_required: true</code> —— 等下載完再 call 一次，或者重啟容器。</p>
+
+<h3>要回滾</h3>
+<div class="cmd">
+  <div class="at"><b>NAS</b> · SSH · project 目錄</div>
+  <pre>git checkout &lt;舊嘅 commit&gt;
+docker compose build backend
+docker compose up -d</pre>
+</div>
+<p>Volume 唔受影響，所以音檔同資料庫照舊。真係要還原資料庫先 <code>psql -U ytaudio -d ytaudio -f ~/ytaudio-db-YYYY-MM-DD.sql</code>。</p>
+
+
+<h2 id="ref">D. 速查</h2>
+
+<div class="tw">
+<table>
+  <tr><th>項目</th><th>值</th></tr>
+  <tr><td>Android package</td><td><code>net.teashop.you_audio</code></td></tr>
+  <tr><td>APK 輸出路徑</td><td><code>flutter_app/build/app/outputs/flutter-apk/app-release.apk</code></td></tr>
+  <tr><td>版本號唯一來源</td><td><code>flutter_app/pubspec.yaml</code> 嘅 <code>version: X.Y.Z+N</code>（<code>build.gradle</code> 讀佢）</td></tr>
+  <tr><td>升版號 + build + 裝</td><td><code>cd flutter_app &amp;&amp; make install</code></td></tr>
+  <tr><td>Backend port</td><td><code>8000</code></td></tr>
+  <tr><td>本機 DB</td><td>SQLite <code>backend/ytaudio.db</code></td></tr>
+  <tr><td>本機檔案</td><td><code>backend/data/audio</code>、<code>backend/data/thumbnails</code></td></tr>
+  <tr><td>NAS DB</td><td>Postgres 16，volume <code>pgdata</code></td></tr>
+  <tr><td>NAS 音檔</td><td>volume <code>ytdata</code> → 容器內 <code>/data</code></td></tr>
+  <tr><td>Synology volume 實際路徑</td><td><code>/volume1/@docker/volumes/&lt;project&gt;_ytdata/_data</code></td></tr>
+</table>
+</div>
+
+<h3>更新 NAS 前逐項打勾</h3>
+<ul>
+  <li>☐ <code>pg_dump</code> 備份做完，檔案大細唔係 0</li>
+  <li>☐ <code>docker-compose.yml</code> 已填 <code>ACCESS_TOKEN</code> 同 <code>YOUTUBE_API_KEY</code></li>
+  <li>☐ 指令裡面完全冇 <code>-v</code> 或 <code>--volumes</code></li>
+  <li>☐ 已 <code>git pull</code> 到修好 <code>yt-dlp-ejs</code> 版本號嘅版本（唔然 image build 會失敗）</li>
+  <li>☐ Log 見到 <code>Added missing column</code>，或者 <code>\d videos</code> 見到 <code>channel_id</code></li>
+  <li>☐ <code>/api/videos</code> 仍然列得出更新前嗰批片</li>
+  <li>☐ App Settings 嘅 <b>Test</b> 掣顯示 token 有效</li>
+</ul>
+
+<footer>
+  寫於 2026-08-17，對應 <code>feature/spec-2026-06-22-improvements</code> 分支。
+  改過 <code>build.gradle</code>、<code>docker-compose.yml</code> 或驗證方式之後，記得返嚟更新呢份文件。
+</footer>

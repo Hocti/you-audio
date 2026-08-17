@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/audio_service.dart';
 import '../services/local_library.dart';
 import '../models/subtitle_entry.dart';
@@ -23,48 +23,112 @@ class _PlayTabState extends State<PlayTab> {
   double _currentSpeed = 1.0;
   StreamSubscription<dynamic>? _mediaItemSub;
 
-  // Auto-scroll: a key tracks the currently-highlighted subtitle line so we can
-  // bring it into view; `_autoScrolledIndex` ensures we only scroll once per
-  // line change (not on every position tick).
+  // Auto-scroll ("follow the line being spoken"). A key marks the currently
+  // highlighted line so it can be revealed; `_autoScrolledIndex` keeps us to one
+  // scroll per line change rather than one per position tick.
+  static const String _autoScrollPrefKey = 'subtitle_autoscroll';
+
+  /// Where the followed line lands in the viewport (0 = top, 1 = bottom).
+  static const double _followAlignment = 0.35;
+
   final GlobalKey _currentLineKey = GlobalKey();
+  final ScrollController _subtitleScroll = ScrollController();
+  bool _autoScroll = true;
   int _autoScrolledIndex = -1;
 
-  /// Scroll the current subtitle line into view **only when it's no longer
-  /// visible** — so the list scrolls about a page at a time instead of on every
-  /// line. Uses the live key's render box vs. the scroll viewport to decide.
+  Future<void> _loadAutoScrollPref() async {
+    final prefs = await SharedPreferences.getInstance();
+    final enabled = prefs.getBool(_autoScrollPrefKey) ?? true;
+    if (mounted && enabled != _autoScroll) {
+      setState(() => _autoScroll = enabled);
+    }
+  }
+
+  Future<void> _saveAutoScrollPref(bool enabled) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_autoScrollPrefKey, enabled);
+  }
+
+  Duration get _playerPosition => AudioManager.isInitialized
+      ? AudioManager.handler.player.position
+      : Duration.zero;
+
+  /// Follow the current line as playback moves, once per line change.
   void _maybeAutoScroll(int currentIdx) {
-    if (currentIdx < 0 || currentIdx == _autoScrolledIndex) return;
+    if (!_autoScroll || currentIdx < 0 || currentIdx == _autoScrolledIndex) {
+      return;
+    }
     _autoScrolledIndex = currentIdx;
+    _scrollToLine(currentIdx);
+  }
+
+  /// Bring line [index] into view.
+  ///
+  /// A line only carries [_currentLineKey] once it is built, and a line far
+  /// outside the viewport isn't built at all — the old code gave up there, which
+  /// is why auto-scroll went dead after a manual scroll or a seek. When the key
+  /// has no context we jump to an estimated offset instead; that builds the real
+  /// line, and the retry lands on it exactly.
+  void _scrollToLine(int index, {int attempt = 0}) {
+    if (attempt > 3) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
+      if (!mounted || !_autoScroll) return;
+
       final ctx = _currentLineKey.currentContext;
-      if (ctx == null) return; // line not built (far off-screen)
-      final box = ctx.findRenderObject() as RenderBox?;
-      if (box == null || !box.hasSize) return;
+      if (ctx != null) {
+        Scrollable.ensureVisible(
+          ctx,
+          alignment: _followAlignment,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+        );
+        return;
+      }
 
-      final viewport = RenderAbstractViewport.of(box);
-      final position = Scrollable.of(ctx).position;
-      // Scroll offsets that would pin the line to the top / bottom edges.
-      final toTop = viewport.getOffsetToReveal(box, 0.0).offset;
-      final toBottom = viewport.getOffsetToReveal(box, 1.0).offset;
-      final lower = toTop < toBottom ? toTop : toBottom;
-      final upper = toTop < toBottom ? toBottom : toTop;
-
-      // Fully visible at the current offset → leave the view alone.
-      if (position.pixels >= lower - 1 && position.pixels <= upper + 1) return;
-
-      Scrollable.ensureVisible(
-        ctx,
-        alignment: 0.3, // land near the top so a fresh page of lines follows
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeInOut,
+      if (!_subtitleScroll.hasClients || _subtitles.isEmpty) return;
+      final position = _subtitleScroll.position;
+      final estimate = position.maxScrollExtent * (index / _subtitles.length);
+      _subtitleScroll.jumpTo(
+        estimate.clamp(position.minScrollExtent, position.maxScrollExtent),
       );
+      _scrollToLine(index, attempt: attempt + 1);
     });
+  }
+
+  /// Turning it on jumps to wherever playback is *now*, so the user doesn't have
+  /// to wait for the next line before the view catches up.
+  void _toggleAutoScroll() {
+    final enabled = !_autoScroll;
+    setState(() {
+      _autoScroll = enabled;
+      _autoScrolledIndex = -1;
+    });
+    _saveAutoScrollPref(enabled);
+    if (!enabled) return;
+    final idx = _currentSubtitleIndex(_playerPosition);
+    if (idx >= 0) {
+      _autoScrolledIndex = idx;
+      _scrollToLine(idx);
+    }
+  }
+
+  /// A finger drag means the user has taken over: stop following until they
+  /// re-arm the toggle. Programmatic scrolls carry no drag details, so
+  /// auto-scroll never switches itself off.
+  bool _onSubtitleScroll(ScrollNotification n) {
+    final dragged = (n is ScrollStartNotification && n.dragDetails != null) ||
+        (n is ScrollUpdateNotification && n.dragDetails != null);
+    if (dragged && _autoScroll) {
+      setState(() => _autoScroll = false);
+      _saveAutoScrollPref(false);
+    }
+    return false; // keep the notification bubbling
   }
 
   @override
   void initState() {
     super.initState();
+    _loadAutoScrollPref();
     _tryLoadSubtitles();
     if (AudioManager.isInitialized) {
       _currentSpeed = AudioManager.handler.player.speed;
@@ -80,6 +144,7 @@ class _PlayTabState extends State<PlayTab> {
   @override
   void dispose() {
     _mediaItemSub?.cancel();
+    _subtitleScroll.dispose();
     super.dispose();
   }
 
@@ -284,32 +349,68 @@ class _PlayTabState extends State<PlayTab> {
       );
     }
 
-    return ListView.builder(
-      itemCount: _subtitles.length,
-      itemBuilder: (context, i) {
-        final entry = _subtitles[i];
-        final isCurrent = i == currentIdx;
-        return ListTile(
-          key: isCurrent ? _currentLineKey : null,
-          dense: true,
-          selected: isCurrent,
-          selectedTileColor:
-              Theme.of(context).colorScheme.primaryContainer,
-          title: Text(
-            entry.text,
-            style: TextStyle(
-              fontWeight:
-                  isCurrent ? FontWeight.bold : FontWeight.normal,
-              color: isCurrent
-                  ? Theme.of(context)
-                      .colorScheme
-                      .onPrimaryContainer
-                  : null,
-            ),
+    return Stack(
+      children: [
+        NotificationListener<ScrollNotification>(
+          onNotification: _onSubtitleScroll,
+          child: ListView.builder(
+            controller: _subtitleScroll,
+            itemCount: _subtitles.length,
+            // Room for the toggle button so it never covers the last line.
+            padding: const EdgeInsets.only(bottom: 72),
+            itemBuilder: (context, i) {
+              final entry = _subtitles[i];
+              final isCurrent = i == currentIdx;
+              return ListTile(
+                key: isCurrent ? _currentLineKey : null,
+                dense: true,
+                selected: isCurrent,
+                selectedTileColor:
+                    Theme.of(context).colorScheme.primaryContainer,
+                title: Text(
+                  entry.text,
+                  style: TextStyle(
+                    fontWeight:
+                        isCurrent ? FontWeight.bold : FontWeight.normal,
+                    color: isCurrent
+                        ? Theme.of(context)
+                            .colorScheme
+                            .onPrimaryContainer
+                        : null,
+                  ),
+                ),
+                onTap: () => AudioManager.handler.seek(entry.start),
+              );
+            },
           ),
-          onTap: () => AudioManager.handler.seek(entry.start),
-        );
-      },
+        ),
+        Positioned(
+          right: 12,
+          bottom: 12,
+          child: _buildAutoScrollToggle(context),
+        ),
+      ],
+    );
+  }
+
+  /// Corner toggle for "follow the line being spoken". Filled = following.
+  Widget _buildAutoScrollToggle(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Tooltip(
+      message: _autoScroll
+          ? 'Auto-scroll on — tap to stop following'
+          : 'Auto-scroll off — tap to jump to the current line',
+      child: FloatingActionButton.small(
+        heroTag: null, // not a route transition; avoids hero tag clashes
+        onPressed: _toggleAutoScroll,
+        backgroundColor:
+            _autoScroll ? scheme.primary : scheme.surfaceContainerHighest,
+        foregroundColor:
+            _autoScroll ? scheme.onPrimary : scheme.onSurfaceVariant,
+        child: Icon(_autoScroll
+            ? Icons.center_focus_strong
+            : Icons.center_focus_weak),
+      ),
     );
   }
 }

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import logging
 import os
 import re
+import sys
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -50,7 +52,16 @@ def _convert_subtitle_to_traditional(path: Path) -> None:
     """
     try:
         import chinese_converter
+    except ImportError:
+        # Loud, not silent: a missing dependency is why "繁體化" silently fails.
+        logger.error(
+            "chinese-converter is not installed; subtitle %s kept Simplified. "
+            "Install it (it is in requirements.txt) and rebuild the image.",
+            path.name,
+        )
+        return
 
+    try:
         text = path.read_text(encoding="utf-8")
         path.write_text(chinese_converter.to_traditional(text), encoding="utf-8")
         logger.info("Converted subtitle to Traditional Chinese: %s", path.name)
@@ -103,6 +114,108 @@ progress_store: dict[str, TaskProgress] = {}
 
 def get_progress(task_id: str) -> TaskProgress | None:
     return progress_store.get(task_id)
+
+
+# ---------------------------------------------------------------------------
+# yt-dlp self-update
+# ---------------------------------------------------------------------------
+
+# Refreshed together: yt-dlp plus the bundled JS challenge solver it needs.
+_UPGRADE_PACKAGES = ["yt-dlp", "yt-dlp-ejs"]
+
+# pip over the network; generous but bounded so a hung index can't wedge a worker.
+_UPGRADE_TIMEOUT_SECONDS = 300
+
+# Serializes upgrades so two callers can't pip-install over each other.
+_upgrade_lock = asyncio.Lock()
+
+# Statuses that mean a download is still using the currently-loaded yt-dlp.
+_IN_FLIGHT_STATUSES = ("pending", "downloading", "converting")
+
+
+def yt_dlp_version() -> str:
+    """Version of the yt-dlp actually loaded in this process."""
+    return yt_dlp.version.__version__
+
+
+def downloads_in_flight() -> bool:
+    return any(tp.status in _IN_FLIGHT_STATUSES for tp in progress_store.values())
+
+
+async def _pip_upgrade() -> str:
+    """Run pip to upgrade the yt-dlp packages; return its combined output.
+
+    Raises RuntimeError if pip fails or takes longer than
+    `_UPGRADE_TIMEOUT_SECONDS`. Split out from `upgrade_yt_dlp` so tests can
+    stub the network/pip half.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, "-m", "pip", "install", "--no-cache-dir", "--upgrade",
+        *_UPGRADE_PACKAGES,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    try:
+        raw, _ = await asyncio.wait_for(
+            proc.communicate(), timeout=_UPGRADE_TIMEOUT_SECONDS
+        )
+    except asyncio.TimeoutError:
+        proc.kill()
+        raise RuntimeError(
+            f"pip install timed out after {_UPGRADE_TIMEOUT_SECONDS}s"
+        ) from None
+
+    output = raw.decode(errors="replace").strip()
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"pip install failed (exit {proc.returncode}): {output[-1000:]}"
+        )
+    return output
+
+
+def _reload_yt_dlp() -> str:
+    """Re-import yt_dlp in place so an upgrade applies without a restart.
+
+    Every `yt_dlp*` entry is dropped from `sys.modules` and the package imported
+    again, then this module's global `yt_dlp` is rebound. Callers must only do
+    this while no download is running: an in-flight `_sync_download` holds the
+    old module objects and could still lazy-import a submodule from under it.
+    """
+    global yt_dlp
+    for name in [n for n in sys.modules if n == "yt_dlp" or n.startswith("yt_dlp.")]:
+        del sys.modules[name]
+    yt_dlp = importlib.import_module("yt_dlp")
+    return yt_dlp.version.__version__
+
+
+async def upgrade_yt_dlp() -> dict[str, Any]:
+    """Upgrade yt-dlp to the latest release and load it into this process.
+
+    YouTube breaks stale yt-dlp builds every few months, so this exists to fix
+    downloads without rebuilding or restarting the container. Reloading is
+    skipped while a download is in flight — the new version is on disk and takes
+    effect on the next restart, reported as `restart_required`.
+    """
+    async with _upgrade_lock:
+        before = yt_dlp_version()
+        output = await _pip_upgrade()
+
+        if downloads_in_flight():
+            after, reloaded = before, False
+            logger.info("yt-dlp upgraded on disk; reload deferred (download in flight)")
+        else:
+            after, reloaded = _reload_yt_dlp(), True
+            logger.info("yt-dlp reloaded: %s -> %s", before, after)
+
+        return {
+            "previous_version": before,
+            "current_version": after,
+            "updated": after != before,
+            "reloaded": reloaded,
+            # pip pulled a new build but we couldn't swap it in yet.
+            "restart_required": not reloaded and "Successfully installed" in output,
+            "pip_output": output[-2000:],
+        }
 
 
 # ---------------------------------------------------------------------------

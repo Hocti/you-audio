@@ -85,3 +85,29 @@ class ChannelVideosResponse(BaseModel):
 class ChannelResolveResponse(BaseModel):
     channel_id: str
     channel_name: str | None = None
+
+
+# --- users ---
+class UserOut(BaseModel):
+    id: int
+    username: str
+    token: str
+    is_admin: bool
+    created_at: datetime.datetime
+
+    model_config = {"from_attributes": True}
+
+
+class UserCreate(BaseModel):
+    username: str
+    token: str | None = None
+
+
+class UserUpdate(BaseModel):
+    username: str | None = None
+    token: str | None = None
+
+
+class UserListResponse(BaseModel):
+    users: list[UserOut]
+    total: int

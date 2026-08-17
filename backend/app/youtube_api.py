@@ -111,6 +111,11 @@ async def _filter_playable(client: httpx.AsyncClient, videos: list[dict]) -> lis
     every accessible video. Videos missing from the response are members-only,
     private, or deleted (an unauthenticated key can't see them) and are dropped;
     videos at/under the Shorts length threshold are dropped too.
+
+    A zero duration is *not* a Short: live streams, upcoming videos, and
+    premieres report `P0D`. Dropping those made a video the user had just failed
+    to download vanish from the channel list on the next refresh, with no way to
+    see or retry it — so they are kept and left for the download to reject.
     """
     ids = [v["video_id"] for v in videos if v.get("video_id")]
     if not ids:
@@ -136,8 +141,8 @@ async def _filter_playable(client: httpx.AsyncClient, videos: list[dict]) -> lis
         if vid not in durations:
             continue  # members-only / private / deleted -> not accessible
         secs = durations[vid]
-        if secs is not None and secs <= _SHORTS_MAX_SECONDS:
-            continue  # Short
+        if secs is not None and 0 < secs <= _SHORTS_MAX_SECONDS:
+            continue  # Short (a 0 here means live/upcoming, not a Short)
         result.append(v)
     return result
 

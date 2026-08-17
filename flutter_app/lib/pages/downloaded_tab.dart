@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/local_video.dart';
+import '../services/api_service.dart';
 import '../services/audio_service.dart';
 import '../services/local_library.dart';
 import '../services/download_manager.dart';
@@ -12,6 +13,9 @@ enum SortMode { downloadTime, channel, listenStatus }
 enum FilterMode { all, unlistened, listened }
 
 class DownloadedTab extends StatefulWidget {
+  /// Only used to retry a failed download from its row.
+  final ApiService api;
+
   final VoidCallback onPlayTap;
 
   /// Opens the Channel tab on the given channel. Receives a channel id when
@@ -21,6 +25,7 @@ class DownloadedTab extends StatefulWidget {
 
   const DownloadedTab({
     super.key,
+    required this.api,
     required this.onPlayTap,
     required this.onOpenChannel,
   });
@@ -489,15 +494,38 @@ class _DownloadedTabState extends State<DownloadedTab> {
                 color: isError ? Theme.of(context).colorScheme.error : null,
               )),
       trailing: isError
-          ? IconButton(
-              icon: const Icon(Icons.close),
-              tooltip: 'Dismiss',
-              onPressed: () => DownloadManager.instance.dismiss(job.id),
+          ? Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Retry needs the video id; a job that failed before metadata
+                // came back doesn't have one, so it can only be dismissed.
+                if (job.youtubeId.isNotEmpty)
+                  IconButton(
+                    icon: const Icon(Icons.refresh),
+                    tooltip: 'Retry download',
+                    onPressed: () => _retry(job),
+                  ),
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  tooltip: 'Dismiss',
+                  onPressed: () => DownloadManager.instance.dismiss(job.id),
+                ),
+              ],
             )
           : const SizedBox(
               width: 20, height: 20,
               child: CircularProgressIndicator(strokeWidth: 2),
             ),
+    );
+  }
+
+  void _retry(DownloadJob job) {
+    DownloadManager.instance.start(
+      widget.api,
+      'https://www.youtube.com/watch?v=${job.youtubeId}',
+    );
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Retrying "${job.title}"…')),
     );
   }
 

@@ -99,7 +99,17 @@
       "Bash(python3 -m py_compile app/main.py app/downloader.py app/youtube_api.py app/schemas.py app/models.py)",
       "Bash(timeout 300 ./gradlew :app:checkDebugAarMetadata --console=plain)",
       "Bash(flutter config *)",
-      "Bash(flutter clean *)"
+      "Bash(flutter clean *)",
+      "Bash(python3 -c \"import chinese_converter; print\\('to_traditional:', chinese_converter.to_traditional\\('简体中文测试'\\)\\)\")",
+      "Bash(python3 -c \"import pytest, pytest_asyncio; print\\('pytest ok'\\)\")",
+      "Bash(python3 -c \"import fastapi, yt_dlp; print\\('app deps present'\\)\")",
+      "Bash(pip3 install *)",
+      "Bash(python3 -c \"import chinese_converter; print\\(repr\\(chinese_converter.to_traditional\\('简体中文测试'\\)\\)\\)\")",
+      "Bash(python3 -c \"import pytest, pytest_asyncio; print\\('pytest', pytest.__version__\\)\")",
+      "Bash(python3 -m pytest -q)",
+      "Bash(python3 -c \"from app import main; print\\('import OK'\\)\")",
+      "Bash(DATABASE_URL=\"sqlite+aiosqlite:///./ytaudio.db\" DATA_DIR=./data python3 -c \"from app import main; print\\('import OK with sqlite'\\)\")",
+      "Bash(python3 -m pytest -v)"
     ],
     "additionalDirectories": [
       "/home/hocti/.claude",

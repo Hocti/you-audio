@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
+import '../services/back_interceptor.dart';
 import '../services/download_manager.dart';
 import '../services/download_foreground_service.dart';
 import '../services/share_handler.dart';
@@ -34,6 +36,19 @@ class _MainScaffoldState extends State<MainScaffold> {
   // Carries a shared channel link/id to the Channel tab to open its detail view.
   final ValueNotifier<String?> _openChannelRequest = ValueNotifier<String?>(null);
 
+  // Tabs the user came from, most recent last — the Android back button walks
+  // this instead of quitting the app (tabs live in an IndexedStack, so there are
+  // no routes for the Navigator to pop).
+  final List<int> _tabHistory = [];
+
+  // How many tab hops back are remembered before the oldest is forgotten.
+  static const int _maxTabHistory = 10;
+
+  // Lets the Channel tab claim a back press while its detail view is open.
+  final BackInterceptor _channelBack = BackInterceptor();
+
+  static const int _channelTabIndex = 1;
+
   @override
   void initState() {
     super.initState();
@@ -65,6 +80,28 @@ class _MainScaffoldState extends State<MainScaffold> {
     super.dispose();
   }
 
+  /// Switches tabs, remembering where we came from so back can return there.
+  void _setTab(int index) {
+    if (index == _currentIndex) return;
+    setState(() {
+      _tabHistory.add(_currentIndex);
+      if (_tabHistory.length > _maxTabHistory) _tabHistory.removeAt(0);
+      _currentIndex = index;
+    });
+  }
+
+  /// Android back / predictive-back gesture. Gives the current tab's nested
+  /// views (Channel detail, its search field) first refusal, then walks the tab
+  /// history, and only leaves the app once there's nothing left to go back to.
+  void _handleBack() {
+    if (_currentIndex == _channelTabIndex && _channelBack.handleBack()) return;
+    if (_tabHistory.isNotEmpty) {
+      setState(() => _currentIndex = _tabHistory.removeLast());
+      return;
+    }
+    SystemNavigator.pop();
+  }
+
   void _handleShare(String text) {
     final url = firstUrl(text) ?? text.trim();
     final kind = classifyUrl(url);
@@ -77,11 +114,11 @@ class _MainScaffoldState extends State<MainScaffold> {
         ShareHandler.instance.moveToBackground();
         break;
       case SharedLinkKind.channel:
-        if (mounted) setState(() => _currentIndex = 1);
+        if (mounted) _setTab(_channelTabIndex);
         _openChannelRequest.value = url;
         break;
       case SharedLinkKind.unknown:
-        if (mounted) setState(() => _currentIndex = 0);
+        if (mounted) _setTab(0);
         break;
     }
   }
@@ -99,13 +136,13 @@ class _MainScaffoldState extends State<MainScaffold> {
     });
   }
 
-  void _goToPlay() => setState(() => _currentIndex = 3);
+  void _goToPlay() => _setTab(3);
 
   /// Switch to the Channel tab and open the given channel (id or name). Used by
   /// the Downloaded tab's "Open channel" action; reuses the shared channel-open
   /// request consumed by ChannelTab.
   void _openChannel(String idOrName) {
-    setState(() => _currentIndex = 1);
+    _setTab(_channelTabIndex);
     _openChannelRequest.value = idOrName;
   }
 
@@ -118,8 +155,13 @@ class _MainScaffoldState extends State<MainScaffold> {
         api: _api,
         onPlayTap: _goToPlay,
         openRequest: _openChannelRequest,
+        backInterceptor: _channelBack,
       ),
-      DownloadedTab(onPlayTap: _goToPlay, onOpenChannel: _openChannel),
+      DownloadedTab(
+        api: _api,
+        onPlayTap: _goToPlay,
+        onOpenChannel: _openChannel,
+      ),
       const PlayTab(),
       SettingsTab(
         initialUrl: _serverUrl,
@@ -128,6 +170,20 @@ class _MainScaffoldState extends State<MainScaffold> {
       ),
     ];
 
+    // canPop is false so every back press reaches _handleBack; it calls
+    // SystemNavigator.pop() itself once there is nothing left to go back to.
+    // Pushed routes (Queue page, bottom sheets) sit above this one and still pop
+    // normally — PopScope only fires when this route is the top one.
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _handleBack();
+      },
+      child: _buildScaffold(tabs),
+    );
+  }
+
+  Widget _buildScaffold(List<Widget> tabs) {
     return Scaffold(
       body: IndexedStack(
         index: _currentIndex,
@@ -141,7 +197,7 @@ class _MainScaffoldState extends State<MainScaffold> {
             const PlayerBar(),
             NavigationBar(
               selectedIndex: _currentIndex,
-              onDestinationSelected: (i) => setState(() => _currentIndex = i),
+              onDestinationSelected: _setTab,
               destinations: const [
                 NavigationDestination(icon: Icon(Icons.link), label: 'Link'),
                 NavigationDestination(icon: Icon(Icons.subscriptions), label: 'Channel'),

@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/local_video.dart';
 import '../models/video.dart';
@@ -44,7 +46,86 @@ class DownloadManager {
   final List<DownloadJob> _list = [];
   int _nextId = 1;
 
+  /// Where failed attempts are kept between runs — see [_persistFailed].
+  static const String _failedPrefsKey = 'failed_downloads';
+
   void _publish() => jobs.value = List.unmodifiable(_list);
+
+  /// Saves the failed jobs so they outlive the process.
+  ///
+  /// A failure doesn't count towards [_activeCount], so the foreground service
+  /// stops the moment one happens and Android is free to kill the app. The
+  /// failure list lived only in memory, so every trace of a failed download
+  /// vanished from both the Channel and the Downloaded tab on the next launch —
+  /// the video looked as if it had never been tried.
+  Future<void> _persistFailed() async {
+    final failed =
+        _list.where((j) => j.stage == DownloadStage.error).toList();
+    final prefs = await SharedPreferences.getInstance();
+    if (failed.isEmpty) {
+      await prefs.remove(_failedPrefsKey);
+      return;
+    }
+    await prefs.setString(
+      _failedPrefsKey,
+      jsonEncode([
+        for (final j in failed)
+          {'youtube_id': j.youtubeId, 'title': j.title, 'error': j.error},
+      ]),
+    );
+  }
+
+  /// Reloads failures from a previous session. Call once at startup, before any
+  /// new download starts. Entries downloaded successfully since are dropped.
+  Future<void> restoreFailed() async {
+    await LocalLibrary.ensureInitialized();
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_failedPrefsKey);
+    if (raw == null || raw.isEmpty) return;
+
+    try {
+      final saved = jsonDecode(raw) as List<dynamic>;
+      // Reversed + insert(0) preserves the saved order at the top of the list.
+      for (final entry in saved.reversed) {
+        final m = entry as Map<String, dynamic>;
+        final id = m['youtube_id'] as String? ?? '';
+        if (id.isNotEmpty &&
+            (LocalLibrary.contains(id) ||
+                _list.any((j) => j.youtubeId == id))) {
+          continue;
+        }
+        _list.insert(
+          0,
+          DownloadJob(
+            id: _nextId++,
+            youtubeId: id,
+            title: m['title'] as String? ?? 'Download failed',
+            stage: DownloadStage.error,
+            error: m['error'] as String?,
+          ),
+        );
+      }
+      _publish();
+      await _persistFailed(); // rewrite without the entries we dropped
+    } catch (_) {
+      await prefs.remove(_failedPrefsKey); // unreadable — start clean
+    }
+  }
+
+  /// Drops an earlier failed attempt at the same video so a retry doesn't leave
+  /// a stale error row sitting next to the live one.
+  void _clearFailedFor(String youtubeId, DownloadJob current) {
+    if (youtubeId.isEmpty) return;
+    final before = _list.length;
+    _list.removeWhere((j) =>
+        !identical(j, current) &&
+        j.youtubeId == youtubeId &&
+        j.stage == DownloadStage.error);
+    if (_list.length != before) {
+      _publish();
+      _persistFailed();
+    }
+  }
 
   /// Jobs still doing work (errors are terminal and don't keep the service up).
   int get _activeCount =>
@@ -73,10 +154,11 @@ class DownloadManager {
     _publish();
   }
 
-  /// Dismiss a failed job from the list.
+  /// Dismiss a failed job from the list (and from the saved failures).
   void dismiss(int jobId) {
     _list.removeWhere((j) => j.id == jobId);
     _publish();
+    _persistFailed();
   }
 
   Future<void> start(ApiService api, String url) async {
@@ -100,6 +182,7 @@ class DownloadManager {
       job.youtubeId = youtubeId;
       final title = (meta?['title'] as String?) ?? (respVideo?['title'] as String?);
       if (title != null) job.title = title;
+      _clearFailedFor(youtubeId, job);
       _publish();
 
       if (youtubeId.isEmpty) {
@@ -128,6 +211,7 @@ class DownloadManager {
       job.stage = DownloadStage.error;
       job.error = e.toString();
       _publish();
+      await _persistFailed();
     } finally {
       await _stopServiceIfIdle();
     }
@@ -144,6 +228,7 @@ class DownloadManager {
       if (youtubeId.isNotEmpty) job.youtubeId = youtubeId;
       final title = meta['title'] as String?;
       if (title != null && title.isNotEmpty) job.title = title;
+      _clearFailedFor(youtubeId, job);
       _publish();
 
       // Pull the thumbnail early (best-effort) for the in-progress row.

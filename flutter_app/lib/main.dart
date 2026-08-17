@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'pages/server_setup_page.dart';
 import 'services/audio_service.dart';
+import 'services/download_manager.dart';
 import 'services/local_library.dart';
 
 Future<void> main() async {
@@ -9,6 +10,9 @@ Future<void> main() async {
   // audio_service pattern) rather than inside a navigated widget.
   try {
     await LocalLibrary.ensureInitialized();
+    // Failed downloads from the last run, so they stay visible and retryable
+    // instead of disappearing when Android kills the process.
+    await DownloadManager.instance.restoreFailed();
     await AudioManager.init();
     // Restore the last-played track (paused) so the app opens where it left off.
     await AudioManager.handler.restoreLastSession();

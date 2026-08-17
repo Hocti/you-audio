@@ -4,6 +4,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import '../models/channel_video.dart';
 import '../services/api_service.dart';
 import '../services/audio_service.dart';
+import '../services/back_interceptor.dart';
 import '../services/bookmark_service.dart';
 import '../services/download_manager.dart';
 import '../services/local_library.dart';
@@ -25,11 +26,16 @@ class ChannelTab extends StatefulWidget {
   /// it is resolved like a pasted channel. Consumed (reset to null) once handled.
   final ValueNotifier<String?>? openRequest;
 
+  /// Host-owned hook for the Android back gesture: this tab consumes it while a
+  /// channel detail view (or its search field) is open.
+  final BackInterceptor? backInterceptor;
+
   const ChannelTab({
     super.key,
     required this.api,
     required this.onPlayTap,
     this.openRequest,
+    this.backInterceptor,
   });
 
   @override
@@ -43,10 +49,15 @@ class _ChannelTabState extends State<ChannelTab> {
   bool _resolving = false;
   List<ChannelBookmark> _bookmarks = [];
 
+  /// Back-press hook the detail view registers itself with, so it can close its
+  /// search field before we leave the detail view entirely.
+  final BackInterceptor _detailBack = BackInterceptor();
+
   @override
   void initState() {
     super.initState();
     _loadBookmarks();
+    widget.backInterceptor?.register(_handleBack);
     widget.openRequest?.addListener(_onOpenRequest);
     // Handle a request that was set before this tab was built.
     if (widget.openRequest?.value != null) {
@@ -56,8 +67,21 @@ class _ChannelTabState extends State<ChannelTab> {
 
   @override
   void dispose() {
+    widget.backInterceptor?.unregister(_handleBack);
     widget.openRequest?.removeListener(_onOpenRequest);
     super.dispose();
+  }
+
+  /// Android back inside this tab: close the detail view's search, else return
+  /// from the detail view to the channel list. False = nothing to go back to,
+  /// so the host decides (switch tabs / leave the app).
+  bool _handleBack() {
+    if (_detailBack.handleBack()) return true;
+    if (_channelId != null) {
+      _back();
+      return true;
+    }
+    return false;
   }
 
   void _onOpenRequest() {
@@ -144,6 +168,7 @@ class _ChannelTabState extends State<ChannelTab> {
       initialName: _channelName,
       onBack: _back,
       onPlayTap: widget.onPlayTap,
+      backInterceptor: _detailBack,
     );
   }
 
@@ -242,6 +267,7 @@ class _ChannelDetailView extends StatefulWidget {
   final String? initialName;
   final VoidCallback onBack;
   final VoidCallback onPlayTap;
+  final BackInterceptor backInterceptor;
 
   const _ChannelDetailView({
     super.key,
@@ -250,6 +276,7 @@ class _ChannelDetailView extends StatefulWidget {
     required this.initialName,
     required this.onBack,
     required this.onPlayTap,
+    required this.backInterceptor,
   });
 
   @override
@@ -272,14 +299,25 @@ class _ChannelDetailViewState extends State<_ChannelDetailView> {
   void initState() {
     super.initState();
     _channelName = widget.initialName;
+    widget.backInterceptor.register(_handleBack);
     _loadBookmarkState();
     _load();
   }
 
   @override
   void dispose() {
+    widget.backInterceptor.unregister(_handleBack);
     _searchController.dispose();
     super.dispose();
+  }
+
+  /// Back closes an open search field. Leaving the channel is the parent's job.
+  bool _handleBack() {
+    if (_searching) {
+      _toggleSearch();
+      return true;
+    }
+    return false;
   }
 
   void _toggleSearch() {

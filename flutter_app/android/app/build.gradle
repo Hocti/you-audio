@@ -26,8 +26,10 @@ android {
         applicationId "net.teashop.you_audio"
         minSdkVersion flutter.minSdkVersion
         targetSdk 36
-        versionCode 1
-        versionName "1.0"
+        // 由 pubspec.yaml 嘅 `version: X.Y.Z+N` 讀取（N 就係 versionCode）。
+        // 用 `make apk` / `make install`，tool/bump_version.sh 會自動遞增。
+        versionCode flutter.versionCode
+        versionName flutter.versionName
     }
 
     buildTypes {

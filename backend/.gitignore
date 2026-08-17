@@ -31,3 +31,6 @@ docker-compose.override.yml
 *.log
 
 *.db
+
+# Test cache
+.pytest_cache/

@@ -36,6 +36,7 @@ flutter_app/
 │   │   ├── download_manager.dart      # Orchestrates backend convert + pull-to-device
 │   │   ├── bookmark_service.dart      # Bookmarked channels (SharedPreferences) + URL→id
 │   │   ├── share_handler.dart         # OS share-intent bridge + URL classification
+│   │   ├── back_interceptor.dart      # Lets a tab claim the Android back press
 │   │   ├── download_foreground_service.dart # Android foreground svc keeping downloads alive
 │   │   └── audio_service.dart         # Background audio playback logic
 │   ├── pages/
@@ -69,6 +70,14 @@ flutter_app/
 ### Main scaffold — `main_scaffold.dart`
 - Hosts the 4-tab `BottomNavigationBar`.
 - Provides the `ApiService` and `AudioPlayerHandler` instances down the widget tree.
+- **Android back handling.** Tabs live in an `IndexedStack`, so there are no routes
+  for the Navigator to pop and back used to quit the app outright. A `PopScope`
+  with `canPop: false` routes every press into `_handleBack()`, which tries, in
+  order: the current tab's nested views via `BackInterceptor` (Channel detail's
+  search field, then the detail view itself → channel list), then the `_tabHistory`
+  stack (every tab switch goes through `_setTab`, capped at 10 entries), and only
+  then `SystemNavigator.pop()` to leave the app. Pushed routes (Queue page, bottom
+  sheets) sit above this route and still pop normally.
 
 ### Tab 1 — `link_tab.dart`
 - Pastes a YouTube URL from the clipboard and hands it to `DownloadManager.instance.start(api, url)` (fire-and-forget).
@@ -84,7 +93,7 @@ flutter_app/
 - Not yet implemented: YouTube OAuth login / subscribed-channel browsing.
 
 ### Tab 3 — `downloaded_tab.dart`
-- Reads the **local library** via `LocalLibrary.all()` (offline; no backend call) and listens to `DownloadManager.instance.jobs` to show in-progress download rows at the top.
+- Reads the **local library** via `LocalLibrary.all()` (offline; no backend call) and listens to `DownloadManager.instance.jobs` to show in-progress download rows at the top. A **failed** row shows the error and carries **Retry** (needs `api`, passed in from `MainScaffold`) + **Dismiss** buttons; it survives an app restart (see `DownloadManager` below).
 - Thumbnails load from local files (`Image.file`).
 - Filter dropdown: **All / Unlistened / Listened** (based on `completed_*` SharedPreferences keys).
 - Sort dropdown: by date, channel, or listen status, plus an asc/desc arrow toggle (`_sortAsc`). Re-picking the current sort type or tapping the arrow flips direction; the default is descending (newest-first).
@@ -98,7 +107,9 @@ flutter_app/
 - Displays current track title, channel, seek bar, and speed control.
 - Speed control cycles through `AudioPlayerHandler.speedSteps` (0.5–2.5×).
 - Subtitles are read from the **local** `.vtt` file (`LocalLibrary.subPath`), parsed into a `SubtitleEntry` list, and shown in a scrollable list below the player.
-- The current subtitle line is highlighted based on `_player.positionStream` and **auto-scrolls** into view — but only when the line has drifted *outside* the viewport (checked via the line's render box vs. the scroll viewport), so it scrolls about a page at a time rather than every line. A `GlobalKey` marks the current line; `_maybeAutoScroll` fires once per line change.
+- The current subtitle line is highlighted based on `_player.positionStream` and **auto-scrolls** into view once per line change, landing at `_followAlignment` (0.35) in the viewport. A `GlobalKey` marks the current line.
+  - A **corner toggle** (small FAB, bottom-right of the subtitle list) arms/disarms following. Any **finger drag** on the list turns it off (`_onSubtitleScroll` only reacts to notifications carrying `dragDetails`, so programmatic scrolls don't self-cancel); tapping it back on **immediately** jumps to the line playing right now instead of waiting for the next one. The state persists in SharedPreferences (`subtitle_autoscroll`).
+  - `_scrollToLine` handles the case that broke the old implementation: a line far outside the viewport isn't built, so the `GlobalKey` has no context. It then jumps to an estimated offset (`maxScrollExtent * index / count`), which builds the line, and retries (≤3 attempts) to land on it exactly.
 - Tap any subtitle line to seek to that position.
 - The AppBar title uses `ScrollingText`; an AppBar **queue** action opens the Up-Next `QueuePage` (also reachable from the queue icon in the player bar).
 
@@ -160,6 +171,14 @@ flutter_app/
 - Exposes `ValueNotifier<List<DownloadJob>> jobs` (`{id, youtubeId, title, stage,
   percent, error}`); the Downloaded tab rebuilds from it. Failed jobs stay until
   `dismiss(jobId)`. This is the only library-side code that touches the backend.
+- **Failures are persisted** (SharedPreferences key `failed_downloads`) and
+  reloaded by `restoreFailed()` in `main()`. Without this they lived only in
+  memory — and since an errored job doesn't count towards `_activeCount`, the
+  foreground service stops the instant one fails and Android is free to kill the
+  process, so every trace of a failed download disappeared from **both** the
+  Channel and Downloaded tabs and the video looked as if it had never been tried.
+  `_clearFailedFor` drops the saved failure when the same video is retried, and
+  entries already in `LocalLibrary` are dropped on restore.
 
 ### `DownloadForegroundService` (`lib/services/download_foreground_service.dart`)
 - Thin wrapper over `flutter_foreground_task`. `DownloadManager` calls
@@ -188,6 +207,7 @@ Constructor: `ApiService(serverUrl, {accessToken})`. All methods include `X-Acce
 | `downloadThumbnailBytes(youtubeId)` | GET | `/api/thumbnail/{youtubeId}` (bytes, with token) |
 | `deleteVideo(youtubeId)` | DELETE | `/api/videos/{youtubeId}` (legacy; not used by the app) |
 | `getSubtitleText(youtubeId)` | GET | `/api/subtitles/{youtubeId}` |
+| *(not wired into the app yet)* | GET | `/api/yt-dlp/version`, `/api/yt-dlp/update` — check/upgrade the backend's yt-dlp |
 | `audioUrl(youtubeId)` | — | Returns full URL string |
 | `thumbnailUrl(youtubeId)` | — | Returns full URL string |
 
@@ -274,6 +294,31 @@ links to `ChannelTab` through a `ValueNotifier<String?> openRequest`.
 - **`MainActivity` must extend `com.ryanheise.audioservice.AudioServiceActivity`** (see `MainActivity.kt`), not the plain `FlutterActivity`. Otherwise `AudioService.init()` throws `PlatformException("The Activity class declared in your AndroidManifest.xml is wrong…")` and playback silently never starts. `MainActivity` also overrides `configureFlutterEngine` to register the `app/share` MethodChannel.
 
 ---
+
+## Versioning & Installing
+
+`pubspec.yaml`'s `version: X.Y.Z+N` is the single source of truth — `build.gradle`
+reads it through `flutter.versionCode` / `flutter.versionName`. `N` is the Android
+versionCode and must only ever increase; Android refuses to replace an installed
+app with a lower one (`INSTALL_FAILED_VERSION_DOWNGRADE`).
+
+Use the `Makefile` (it bumps the version before every build):
+
+| Command | What it does |
+|---|---|
+| `make version` | Show the current version |
+| `make bump` | `tool/bump_version.sh` — patch +1 and build +1 (`1.0.2+5` → `1.0.3+6`) |
+| `make apk` | bump, then `flutter build apk --release` |
+| `make install` | bump, build, then `adb install -r …/app-release.apk` |
+
+**Do not use `flutter install`.** It does not build: `AndroidApk.fromAndroidProject`
+returns the existing `app-release.apk` when the file is present, so it happily
+installs a stale APK. Always `flutter build apk` first.
+
+Release builds are signed with the **debug** keystore (`signingConfig
+signingConfigs.debug`), and `~/.android/debug.keystore` is per-machine — building
+on a different machine produces a signature mismatch that forces an uninstall,
+wiping SharedPreferences and the whole local library. See `deploy-guide.html`.
 
 ## Common Changes
 
