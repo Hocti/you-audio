@@ -16,6 +16,12 @@ services:
       timeout: 3s
       retries: 5
 
+  # Fetches PO Tokens for yt-dlp's bgutil plugin (requirements.txt). YouTube
+  # 403s most media URLs without one — see downloader.py's POT_PROVIDER_URL.
+  pot-provider:
+    image: brainicism/bgutil-ytdlp-pot-provider:latest
+    restart: unless-stopped
+
   backend:
     build: .
     restart: unless-stopped
@@ -25,11 +31,14 @@ services:
       DATABASE_URL: "postgresql+asyncpg://ytaudio:ytaudio@db:5432/ytaudio"
       DATA_DIR: "/data"
       ACCESS_TOKEN: ""
+      POT_PROVIDER_URL: "http://pot-provider:4416"
     volumes:
       - ytdata:/data
     depends_on:
       db:
         condition: service_healthy
+      pot-provider:
+        condition: service_started
 
 volumes:
   pgdata:

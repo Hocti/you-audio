@@ -14,14 +14,21 @@ pydantic==2.8.2
 pydantic-settings==2.3.4
 # yt-dlp must stay current — YouTube changes its URL signing every few months,
 # and a stale version causes HTTP 403 Forbidden on downloads. This is only the
-# build-time baseline; entrypoint.sh upgrades yt-dlp + yt-dlp-ejs to latest on
-# every container start. yt-dlp-ejs bundles the JS challenge solver used with bun.
+# build-time baseline; entrypoint.sh upgrades yt-dlp + yt-dlp-ejs + the PO Token
+# plugin to latest on every container start. yt-dlp-ejs bundles the JS challenge
+# solver used with bun.
 #
 # Note the two use *different* versioning schemes: yt-dlp is date-based
 # (2026.7.4) while yt-dlp-ejs is semver (0.8.0). Pinning yt-dlp-ejs to a date
 # makes it unresolvable and breaks the whole image build.
 yt-dlp>=2026.6.9
 yt-dlp-ejs>=0.8.0
+# yt-dlp plugin that fetches a PO Token from the `pot-provider` sidecar
+# (docker-compose.yml). Without it, YouTube 403s on most media URLs even
+# though extraction succeeds — the JS-challenge solver above (nsig) and this
+# (PO Token) guard two different things. See downloader.py's
+# POT_PROVIDER_URL / _POT_EXTRACTOR_ARGS.
+bgutil-ytdlp-pot-provider>=1.1.0
 python-multipart==0.0.9
 aiofiles==24.1.0
 httpx==0.27.0

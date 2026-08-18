@@ -22,6 +22,19 @@ class ApiService {
   Map<String, String> get authHeaders =>
       accessToken.isEmpty ? const {} : {'X-Access-Token': accessToken};
 
+  /// Pulls FastAPI's `{"detail": "..."}` out of an error response body, so
+  /// callers can surface e.g. "Video unavailable" instead of a bare status
+  /// code. Null if the body isn't JSON or has no `detail`.
+  String? _errorDetail(http.Response resp) {
+    try {
+      final body = jsonDecode(resp.body);
+      if (body is Map && body['detail'] is String) {
+        return body['detail'] as String;
+      }
+    } catch (_) {}
+    return null;
+  }
+
   /// Result of a /api/health probe used by the Settings "Test" button.
   /// [reachable] is false if the server couldn't be contacted at all.
   Future<HealthResult> checkHealth() async {
@@ -55,7 +68,7 @@ class ApiService {
     if (resp.statusCode == 200) {
       return jsonDecode(resp.body) as Map<String, dynamic>;
     }
-    throw Exception('Metadata failed: ${resp.statusCode}');
+    throw Exception(_errorDetail(resp) ?? 'Metadata failed: ${resp.statusCode}');
   }
 
   Future<Map<String, dynamic>> startDownload(String youtubeUrl) async {
@@ -65,7 +78,7 @@ class ApiService {
       body: jsonEncode({'url': youtubeUrl}),
     );
     if (resp.statusCode == 200) return jsonDecode(resp.body) as Map<String, dynamic>;
-    throw Exception('Download failed: ${resp.statusCode}');
+    throw Exception(_errorDetail(resp) ?? 'Download failed: ${resp.statusCode}');
   }
 
   Future<Map<String, dynamic>> getProgress(String taskId) async {
@@ -162,6 +175,13 @@ class ApiService {
 
   String audioUrl(String youtubeId) => '$_base/api/audio/$youtubeId';
   String thumbnailUrl(String youtubeId) => '$_base/api/thumbnail/$youtubeId';
+
+  /// Audio URL for the **streaming** player. Must not be `audioUrl`: that route
+  /// advertises `Accept-Ranges: bytes` but ignores `Range` and answers 200 with
+  /// the whole file, so seeking a partly-cached stream would play the bytes from
+  /// offset 0 as if they came from the requested position. `/api/stream` answers
+  /// a real 206.
+  String streamUrl(String youtubeId) => '$_base/api/stream/$youtubeId';
 
   /// Full metadata for a single downloaded video, or null if not found.
   Future<Video?> getVideoMeta(String youtubeId) async {

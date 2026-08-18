@@ -8,6 +8,7 @@ import '../services/back_interceptor.dart';
 import '../services/bookmark_service.dart';
 import '../services/download_manager.dart';
 import '../services/local_library.dart';
+import '../services/stream_manager.dart';
 import '../widgets/scrolling_text.dart';
 import '../widgets/video_actions.dart';
 
@@ -253,9 +254,60 @@ class _ChannelTabState extends State<ChannelTab> {
             style: Theme.of(context).textTheme.bodySmall),
         trailing: const Icon(Icons.chevron_right),
         onTap: () => _enterDetail(bm.id, name: bm.name),
+        onLongPress: () => showChannelContextMenu(
+          context,
+          channelId: bm.id,
+          channelName: bm.name,
+        ),
       );
     }).toList();
   }
+}
+
+/// Long-press menu for a channel (bookmark row or detail-view title).
+void showChannelContextMenu(
+  BuildContext context, {
+  required String channelId,
+  required String channelName,
+}) {
+  showModalBottomSheet(
+    context: context,
+    builder: (ctx) => SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
+            child: Text(
+              channelName,
+              style: Theme.of(ctx).textTheme.titleSmall,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          const Divider(height: 12),
+          ListTile(
+            leading: const Icon(Icons.content_copy),
+            title: const Text('Copy channel ID'),
+            subtitle: Text(channelId,
+                maxLines: 1, overflow: TextOverflow.ellipsis),
+            onTap: () {
+              Navigator.pop(ctx);
+              copyChannelId(context, channelId);
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.open_in_new),
+            title: const Text('Open channel in YouTube'),
+            onTap: () {
+              Navigator.pop(ctx);
+              openChannelInYouTube(context, channelId);
+            },
+          ),
+        ],
+      ),
+    ),
+  );
 }
 
 /// Per-row state for a channel video.
@@ -424,6 +476,29 @@ class _ChannelDetailViewState extends State<_ChannelDetailView> {
     }
   }
 
+  /// Stream instead of download: the backend still converts, but playback starts
+  /// there and then rather than after the whole file has reached the device.
+  Future<void> _stream(ChannelVideo video) async {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Preparing stream for "${video.title}"…')),
+      );
+    }
+    await StreamManager.instance.start(
+      widget.api,
+      'https://www.youtube.com/watch?v=${video.videoId}',
+      onPlaying: widget.onPlayTap,
+    );
+    if (!mounted) return;
+    final job = StreamManager.instance.job.value;
+    if (job?.stage == StreamStage.error) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Stream failed: ${job?.error ?? 'unknown'}')),
+      );
+    }
+    setState(() {}); // row state may have changed (now playing / downloaded)
+  }
+
   Future<void> _play(String videoId) async {
     final lv = LocalLibrary.get(videoId);
     if (lv == null || !AudioManager.isInitialized) return;
@@ -510,7 +585,16 @@ class _ChannelDetailViewState extends State<_ChannelDetailView> {
                 ),
                 onChanged: (v) => setState(() => _searchQuery = v),
               )
-            : Text(_displayName, overflow: TextOverflow.ellipsis),
+            // Long-press the channel name for the same menu the bookmark rows
+            // have (copy id / open in YouTube).
+            : GestureDetector(
+                onLongPress: () => showChannelContextMenu(
+                  context,
+                  channelId: widget.channelId,
+                  channelName: _displayName,
+                ),
+                child: Text(_displayName, overflow: TextOverflow.ellipsis),
+              ),
         actions: [
           IconButton(
             icon: Icon(_searching ? Icons.close : Icons.search),
@@ -645,6 +729,18 @@ class _ChannelDetailViewState extends State<_ChannelDetailView> {
                 onTap: () {
                   Navigator.pop(ctx);
                   _onTapVideo(video, _RowState.none);
+                },
+              ),
+            // Streaming is opt-in from this menu only — tapping a row still
+            // downloads, which stays the default everywhere.
+            if (!alreadyHere)
+              ListTile(
+                leading: const Icon(Icons.play_circle_outline),
+                title: const Text('Stream audio'),
+                subtitle: const Text('Play as soon as it is ready'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _stream(video);
                 },
               ),
             ListTile(

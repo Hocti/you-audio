@@ -5,16 +5,18 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import secrets
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import inspect as sa_inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from yt_dlp.utils import DownloadError
 
 from .database import async_session, engine, get_session
 from .downloader import (
@@ -312,6 +314,14 @@ async def download(
 # POST /api/metadata  (quick title/channel/duration/thumbnail, no audio)
 # ---------------------------------------------------------------------------
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _clean_yt_dlp_error(exc: Exception) -> str:
+    """Strip yt-dlp's ANSI colour codes and "ERROR: " prefix for API responses."""
+    return _ANSI_RE.sub("", str(exc)).removeprefix("ERROR: ")
+
+
 @app.post("/api/metadata", response_model=MetadataResponse)
 async def metadata(
     body: DownloadRequest,
@@ -330,6 +340,13 @@ async def metadata(
 
         try:
             meta = await fetch_metadata(video_id)
+        except DownloadError as exc:
+            # yt-dlp raised a *definitive* answer about this video (unavailable,
+            # private, removed, geo-blocked, ...) — a client-facing 4xx, not a
+            # 502. 502 is reserved below for genuine backend/yt-dlp failures
+            # (network blips, extractor breakage) where the video itself may be
+            # fine.
+            raise HTTPException(status_code=404, detail=_clean_yt_dlp_error(exc))
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"Metadata fetch failed: {exc}")
 
@@ -402,6 +419,129 @@ async def serve_audio(
         media_type="audio/mpeg",
         filename=f"{row.title or video_id}.mp3",
         headers={"Accept-Ranges": "bytes"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /api/stream/{video_id}   (range-capable MP3 delivery)
+# ---------------------------------------------------------------------------
+
+# Bytes per chunk when streaming a range off disk.
+_STREAM_CHUNK = 64 * 1024
+
+
+def parse_byte_range(header: str | None, file_size: int) -> tuple[int, int] | None:
+    """Parse a single-range `Range: bytes=…` header into inclusive (start, end).
+
+    Returns None when there is no range to honour (absent/unparsable/multi-range
+    header — the caller then serves the whole file, which is what RFC 9110 asks
+    for). Raises `ValueError` when the range is syntactically fine but cannot be
+    satisfied, so the caller can answer 416.
+    """
+    if not header:
+        return None
+    header = header.strip()
+    if not header.startswith("bytes=") or "," in header:
+        return None  # unsupported unit or multi-range: ignore, serve it all
+
+    spec = header[len("bytes=") :].strip()
+    start_text, _, end_text = spec.partition("-")
+    if not _:
+        return None
+
+    # Parse the numbers first and keep it separate from deciding whether the
+    # range is satisfiable — otherwise the `raise ValueError` below is caught by
+    # this very `except` and reported as "no range" instead of a 416.
+    try:
+        suffix_length = int(end_text) if not start_text else None
+        start = int(start_text) if start_text else 0
+        end = int(end_text) if (start_text and end_text) else file_size - 1
+    except ValueError:
+        return None
+
+    if suffix_length is not None:
+        # `bytes=-500` = the final 500 bytes. A zero-length suffix asks for
+        # nothing, which RFC 9110 makes unsatisfiable.
+        if suffix_length <= 0:
+            raise ValueError("unsatisfiable suffix range")
+        start = max(file_size - suffix_length, 0)
+        end = file_size - 1
+
+    if start < 0 or start >= file_size or end < start:
+        raise ValueError("range not satisfiable")
+    return start, min(end, file_size - 1)
+
+
+async def _file_chunks(path: Path, start: int, end: int):
+    """Yield `path[start:end]` (inclusive) in bounded chunks."""
+    remaining = end - start + 1
+    with path.open("rb") as handle:
+        handle.seek(start)
+        while remaining > 0:
+            chunk = handle.read(min(_STREAM_CHUNK, remaining))
+            if not chunk:
+                break
+            remaining -= len(chunk)
+            yield chunk
+
+
+@app.get("/api/stream/{video_id}")
+async def stream_audio(
+    video_id: str,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+    _: User = Depends(get_current_user),
+):
+    """Serve the MP3 with real HTTP range support, for the streaming player.
+
+    Additive: `/api/audio/{video_id}` is untouched and still backs the
+    download-to-device flow. It exists because that route returns a Starlette
+    `FileResponse`, which **ignores** `Range` and answers 200 with the entire
+    file while still advertising `Accept-Ranges: bytes`. A client that believes
+    that header (just_audio's caching source does) asks for a range on seek,
+    gets the whole file back, and plays it as if it started at the offset.
+    """
+    stmt = select(Video).where(Video.youtube_id == video_id, Video.status == "done")
+    row: Video | None = (await session.execute(stmt)).scalar_one_or_none()
+    if not row or not row.mp3_path:
+        raise HTTPException(status_code=404, detail="Audio not found")
+
+    path = Path(row.mp3_path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Audio file missing from disk")
+
+    file_size = path.stat().st_size
+    try:
+        byte_range = parse_byte_range(request.headers.get("range"), file_size)
+    except ValueError:
+        return Response(
+            status_code=416,
+            headers={
+                "Content-Range": f"bytes */{file_size}",
+                "Accept-Ranges": "bytes",
+            },
+        )
+
+    if byte_range is None:
+        start, end, status_code = 0, file_size - 1, 200
+        headers = {
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(file_size),
+        }
+    else:
+        start, end = byte_range
+        status_code = 206
+        headers = {
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(end - start + 1),
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+        }
+
+    return StreamingResponse(
+        _file_chunks(path, start, end),
+        status_code=status_code,
+        media_type="audio/mpeg",
+        headers=headers,
     )
 
 

@@ -9,6 +9,9 @@ import 'package:url_launcher/url_launcher.dart';
 String youtubeWatchUrl(String youtubeId) =>
     'https://www.youtube.com/watch?v=$youtubeId';
 
+String youtubeChannelUrl(String channelId) =>
+    'https://www.youtube.com/channel/$channelId';
+
 Future<void> copyYoutubeLink(BuildContext context, String youtubeId) async {
   await Clipboard.setData(ClipboardData(text: youtubeWatchUrl(youtubeId)));
   if (context.mounted) {
@@ -18,17 +21,37 @@ Future<void> copyYoutubeLink(BuildContext context, String youtubeId) async {
   }
 }
 
+/// Copies the bare `UC…` id — that is what the app's own channel input takes,
+/// so it is more useful here than the full URL.
+Future<void> copyChannelId(BuildContext context, String channelId) async {
+  await Clipboard.setData(ClipboardData(text: channelId));
+  if (context.mounted) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Channel ID copied: $channelId')),
+    );
+  }
+}
+
+Future<void> openChannelInYouTube(
+    BuildContext context, String channelId) async {
+  await _launchExternal(context, youtubeChannelUrl(channelId), 'YouTube');
+}
+
 Future<void> openInYouTube(BuildContext context, String youtubeId) async {
-  final uri = Uri.parse(youtubeWatchUrl(youtubeId));
+  await _launchExternal(context, youtubeWatchUrl(youtubeId), 'YouTube');
+}
+
+Future<void> _launchExternal(
+    BuildContext context, String url, String what) async {
   bool ok = false;
   try {
-    ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    ok = await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
   } catch (_) {
     ok = false;
   }
   if (!ok && context.mounted) {
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text("Couldn't open YouTube")),
+      SnackBar(content: Text("Couldn't open $what")),
     );
   }
 }

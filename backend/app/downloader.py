@@ -96,6 +96,49 @@ THUMB_DIR = DATA_DIR / "thumbnails"
 AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 THUMB_DIR.mkdir(parents=True, exist_ok=True)
 
+# YouTube now requires a PO Token for most googlevideo.com media URLs, or the
+# download 403s even though extraction succeeded (the URL is listed but not
+# authorized). bgutil-ytdlp-pot-provider is a yt-dlp plugin (installed via
+# requirements.txt) that fetches one from a small sidecar HTTP server — see
+# docker-compose.yml's `pot-provider` service. POT_PROVIDER_URL points yt-dlp
+# at it; the plugin's own default (127.0.0.1:4416) only works when both run on
+# the same host, which isn't true across Docker Compose services.
+#
+# A PO token alone isn't enough, though: yt-dlp's default client mix (web,
+# web_safari, android_vr, ...) lists adaptive audio-only formats from clients
+# whose PO token is scoped differently (GVS-bound to a client that YouTube
+# then serves SABR-only, no direct URL, or plain rejects with 403 even with a
+# token attached — see https://github.com/yt-dlp/yt-dlp/issues/12482).
+# `web_music` (music.youtube.com's client) was the one client, of the dozen
+# tried against a real 403 during debugging, whose adaptive audio URLs are
+# actually authorized to download once bgutil supplies its token. But
+# web_music's own catalog is narrower than a regular video client's — it 404s
+# ("Video unavailable") on videos a plain client extracts fine, e.g. the very
+# first YouTube video (jNQXAC9IVRw) — so it can't be the *only* client tried.
+# `android` is the fallback: no PO token needed, and yt-dlp tries clients in
+# the order listed here, falling back to the next when one client's
+# extraction fails outright (not just when its formats 403 on download,
+# unfortunately — a per-video 403 from a listed format still aborts the
+# whole request, which is why web_music has to be first: its formats are the
+# ones that actually download). android's muxed format also downloads, just
+# at ~96kbps AAC, worse than web_music's ~118kbps opus audio-only, and worse
+# still it's muxed with a video track we throw away — acceptable as a
+# fallback, not as the default. Revisit if `web_music` ever stops working —
+# check with `yt-dlp -v` which client's formats actually download, not just
+# which are listed (formats can be listed and still 403 on fetch).
+#
+# Deliberately NOT applied to `_sync_metadata`: that call never touches a
+# media URL (skip_download), so it never hit the 403 this exists for, and
+# forcing web_music there only adds its narrower-catalog 404s for no benefit
+# — plain yt-dlp defaults (all clients) are strictly more permissive for
+# metadata-only lookups.
+_POT_EXTRACTOR_ARGS = {
+    "youtubepot-bgutilhttp": {
+        "base_url": [os.getenv("POT_PROVIDER_URL", "http://127.0.0.1:4416")]
+    },
+    "youtube": {"player_client": ["web_music", "android"]},
+}
+
 
 # ---------------------------------------------------------------------------
 # In-memory progress store
@@ -120,8 +163,8 @@ def get_progress(task_id: str) -> TaskProgress | None:
 # yt-dlp self-update
 # ---------------------------------------------------------------------------
 
-# Refreshed together: yt-dlp plus the bundled JS challenge solver it needs.
-_UPGRADE_PACKAGES = ["yt-dlp", "yt-dlp-ejs"]
+# Refreshed together: yt-dlp, its JS challenge solver, and the PO Token plugin.
+_UPGRADE_PACKAGES = ["yt-dlp", "yt-dlp-ejs", "bgutil-ytdlp-pot-provider"]
 
 # pip over the network; generous but bounded so a hung index can't wedge a worker.
 _UPGRADE_TIMEOUT_SECONDS = 300
@@ -296,6 +339,7 @@ def _sync_download(youtube_id: str, task_id: str) -> dict[str, Any]:
         "overwrites": True,
         # Use bun to solve YouTube's JS challenges (solver bundled via yt-dlp-ejs).
         "js_runtimes": {"bun": {}},
+        "extractor_args": _POT_EXTRACTOR_ARGS,
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -319,6 +363,7 @@ def _sync_download(youtube_id: str, task_id: str) -> dict[str, Any]:
         "no_warnings": True,
         "noplaylist": True,
         "js_runtimes": {"bun": {}},
+        "extractor_args": _POT_EXTRACTOR_ARGS,
     }
     try:
         with yt_dlp.YoutubeDL(subtitle_opts) as ydl_sub:
@@ -350,6 +395,10 @@ def _sync_download(youtube_id: str, task_id: str) -> dict[str, Any]:
 
 def _sync_metadata(youtube_id: str) -> dict[str, Any]:
     """Quick metadata extraction with no media download (runs in a thread)."""
+    # No `extractor_args` override here on purpose — see the comment on
+    # `_POT_EXTRACTOR_ARGS`. This never touches a media URL, so it never hits
+    # the 403 that exists to fix, and the full default client mix is more
+    # permissive for metadata-only lookups than the web_music/android pair.
     ydl_opts: dict[str, Any] = {
         "skip_download": True,
         "quiet": True,

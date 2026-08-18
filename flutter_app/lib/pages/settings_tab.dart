@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
+import '../services/server_profiles.dart';
 
 /// Settings tab: lets the user change the backend server URL and access token
 /// after the initial setup. Values are pre-filled with the current config and
@@ -30,18 +31,134 @@ class _SettingsTabState extends State<SettingsTab> {
   // Result of the last connection test: shown below the Test button.
   ({bool ok, String message})? _testResult;
 
+  // Saved settings the user can switch between. `_currentIsSaved` decides
+  // whether the small button offers Save or Delete.
+  List<ServerProfile> _profiles = const [];
+  bool _currentIsSaved = false;
+
   @override
   void initState() {
     super.initState();
     _urlController = TextEditingController(text: widget.initialUrl);
     _tokenController = TextEditingController(text: widget.initialToken);
+    // Editing either field can change whether it matches a saved profile.
+    _urlController.addListener(_refreshSavedState);
+    _tokenController.addListener(_refreshSavedState);
+    _loadProfiles();
   }
 
   @override
   void dispose() {
+    _urlController.removeListener(_refreshSavedState);
+    _tokenController.removeListener(_refreshSavedState);
     _urlController.dispose();
     _tokenController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadProfiles() async {
+    final items = await ServerProfiles.load();
+    if (!mounted) return;
+    setState(() {
+      _profiles = items;
+      _currentIsSaved = _matchesSaved(items);
+    });
+  }
+
+  bool _matchesSaved(List<ServerProfile> items) {
+    final url = _urlController.text.trim();
+    final token = _tokenController.text.trim();
+    return items.any((p) => p.matches(url, token));
+  }
+
+  void _refreshSavedState() {
+    final saved = _matchesSaved(_profiles);
+    if (saved != _currentIsSaved && mounted) {
+      setState(() => _currentIsSaved = saved);
+    }
+  }
+
+  /// Save the two fields as a profile, or remove it if it is already saved.
+  Future<void> _toggleSaveProfile() async {
+    final url = _urlController.text.trim();
+    if (url.isEmpty) {
+      _snack('Enter a server URL first');
+      return;
+    }
+    final token = _tokenController.text.trim();
+    final items = _currentIsSaved
+        ? await ServerProfiles.remove(url, token)
+        : await ServerProfiles.add(url, token);
+    if (!mounted) return;
+    final removed = _currentIsSaved;
+    setState(() {
+      _profiles = items;
+      _currentIsSaved = _matchesSaved(items);
+    });
+    _snack(removed ? 'Setting deleted' : 'Setting saved');
+  }
+
+  /// Pick one of the saved settings and make it the active one.
+  Future<void> _switchProfile() async {
+    final items = await ServerProfiles.load();
+    if (!mounted) return;
+    setState(() => _profiles = items);
+
+    if (items.isEmpty) {
+      _snack('No saved settings yet — tap Save first');
+      return;
+    }
+
+    final activeUrl = _urlController.text.trim();
+    final activeToken = _tokenController.text.trim();
+
+    final chosen = await showModalBottomSheet<ServerProfile>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+              child: Text('Saved settings',
+                  style: Theme.of(ctx).textTheme.titleSmall),
+            ),
+            for (final p in items)
+              ListTile(
+                leading: Icon(p.matches(activeUrl, activeToken)
+                    ? Icons.radio_button_checked
+                    : Icons.radio_button_unchecked),
+                title: Text(p.url, maxLines: 1, overflow: TextOverflow.ellipsis),
+                subtitle: Text(
+                  p.token.isEmpty ? 'No token' : 'Token ••••${_tail(p.token)}',
+                  style: Theme.of(ctx).textTheme.bodySmall,
+                ),
+                onTap: () => Navigator.pop(ctx, p),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (chosen == null || !mounted) return;
+
+    _urlController.text = chosen.url;
+    _tokenController.text = chosen.token;
+    _refreshSavedState();
+    // "Switch" means switch — apply it, the same way Save & Reconnect does.
+    widget.onSave(chosen.url, chosen.token);
+    FocusScope.of(context).unfocus();
+    _snack('Switched to ${chosen.url}');
+  }
+
+  /// Last few characters of a token, so a profile is recognisable without
+  /// showing the secret.
+  static String _tail(String token) =>
+      token.length <= 4 ? token : token.substring(token.length - 4);
+
+  void _snack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
   }
 
   /// Probes /api/health with the *currently entered* URL/token (not the saved
@@ -201,9 +318,48 @@ class _SettingsTabState extends State<SettingsTab> {
                 ),
               ),
             ),
+            const SizedBox(height: 8),
+            // Saved settings: keep several servers/tokens and jump between them.
+            // Save & Reconnect above still applies whatever is in the fields.
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _toggleSaveProfile,
+                    icon: Icon(
+                      _currentIsSaved
+                          ? Icons.bookmark_remove_outlined
+                          : Icons.bookmark_add_outlined,
+                      size: 18,
+                    ),
+                    label: Text(_currentIsSaved ? 'Delete' : 'Save'),
+                    style: _smallButtonStyle(context),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _switchProfile,
+                    icon: const Icon(Icons.swap_horiz, size: 18),
+                    label: Text(_profiles.isEmpty
+                        ? 'Switch'
+                        : 'Switch (${_profiles.length})'),
+                    style: _smallButtonStyle(context),
+                  ),
+                ),
+              ],
+            ),
           ],
         ),
       ),
     );
   }
+
+  ButtonStyle _smallButtonStyle(BuildContext context) => OutlinedButton.styleFrom(
+        minimumSize: const Size(0, 38),
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        textStyle: Theme.of(context).textTheme.labelMedium,
+        visualDensity: VisualDensity.compact,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      );
 }

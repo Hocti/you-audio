@@ -80,14 +80,15 @@ flutter_app/
   sheets) sit above this route and still pop normally.
 
 ### Tab 1 — `link_tab.dart`
-- Pastes a YouTube URL from the clipboard and hands it to `DownloadManager.instance.start(api, url)` (fire-and-forget).
-- Progress and errors appear as rows in the Downloaded tab (not here).
+- **Paste & Download** (filled): pastes a YouTube URL from the clipboard and hands it to `DownloadManager.instance.start(api, url)` (fire-and-forget). Progress and errors appear as rows in the Downloaded tab (not here).
+- **Paste & Stream** (outlined, below it): `StreamManager.instance.start(...)` — plays as soon as the backend is ready and jumps to the Play tab via `onPlayTap`. Status text is shown inline on this page.
 
 ### Tab 2 — `channel_tab.dart`
 - Two views in one stateful widget:
   - **Paste view**: a "Paste Channel" button that reads the clipboard. A bare/embedded `UC…` id is used directly (`extractChannelId`); anything else (a `/channel/` URL, `@handle` URL, `/user/`, `/c/`) is resolved to a channel id via `ApiService.resolveChannel()` → `GET /api/channel/resolve`. Below the button is a scrollable list of bookmarked channels (`BookmarkService`, SharedPreferences).
     The paste header is part of the same scroll view as the bookmark list (one `ListView`), so on small screens the header scrolls away instead of permanently occupying the top half.
-  - **Detail view**: lists the channel's latest videos via `ApiService.getChannelVideos(channelId)` (Shorts + members-only already filtered server-side). Back button + a star toggle (AppBar action) to bookmark the channel. A **search icon** filters the list by title. Video titles use `ScrollingText`. Long-press a video for a context menu: **Download audio**, **Copy YouTube link**, **Open in YouTube**, **Detail**.
+    **Long-press a bookmarked channel** (or the channel name in the AppBar of the detail view) for `showChannelContextMenu`: **Copy channel ID** (the bare `UC…`, which is what the app's own channel input accepts) and **Open channel in YouTube**.
+  - **Detail view**: lists the channel's latest videos via `ApiService.getChannelVideos(channelId)` (Shorts + members-only already filtered server-side). Back button + a star toggle (AppBar action) to bookmark the channel. A **search icon** filters the list by title. Video titles use `ScrollingText`. Long-press a video for a context menu: **Download audio**, **Stream audio** (see `StreamManager` — opt-in from this menu only; tapping a row still downloads), **Copy YouTube link**, **Open in YouTube**, **Detail**.
 - Tapping a video acts by per-row state (`_RowState`): **none** → start a download; **downloading** → "already downloading"; **downloaded** → play it; **playing** → jump to the Play tab. Trailing icon reflects the state (download / spinner / download_done / equalizer / error). The list rebuilds from `DownloadManager.instance.jobs` so icons update live.
 - Channel thumbnails are direct YouTube CDN URLs, so they need no access token.
 - Not yet implemented: YouTube OAuth login / subscribed-channel browsing.
@@ -179,6 +180,28 @@ flutter_app/
   Channel and Downloaded tabs and the video looked as if it had never been tried.
   `_clearFailedFor` drops the saved failure when the same video is retried, and
   entries already in `LocalLibrary` are dropped on restore.
+
+### `StreamManager` (`lib/services/stream_manager.dart`)
+- Sibling of `DownloadManager`, **not** a replacement — downloading stays the
+  default everywhere. `start(api, url, onPlaying:)` runs: `/api/metadata` →
+  `/api/download` + poll until the backend says `done` → pull thumbnail/subtitle
+  (small, best-effort) → `AudioPlayerHandler.playStream(...)`.
+- Playback begins as soon as the **backend** has the mp3, instead of after the
+  whole file has reached the device. The backend conversion is still on the
+  critical path; only the device transfer moves off it.
+- `playStream` uses `LockCachingAudioSource` (just_audio, `@experimental`) with
+  `cacheFile: LocalLibrary.audioPath(id)` — the cache file *is* the library file,
+  so the track ends up as a normal offline entry. `LocalLibrary.addEntry` runs
+  from the `onCached` callback when caching hits 100%, so a half-cached track
+  never shows as downloaded.
+- It must point at `ApiService.streamUrl` (`/api/stream`), **not** `audioUrl`:
+  seeking past the cached region issues a byte-range request, and `/api/audio`
+  ignores ranges (see backend/CLAUDE.md).
+- `AudioPlayerHandler.streamCacheProgress` (`ValueNotifier<double?>`) exposes
+  device-caching progress, null when nothing is streaming. `playVideo` clears it,
+  so streaming state never leaks into a local-file track.
+- Entry points: the Channel detail long-press menu (**Stream audio**) and the
+  Link tab's **Paste & Stream**. Tapping a row still downloads.
 
 ### `DownloadForegroundService` (`lib/services/download_foreground_service.dart`)
 - Thin wrapper over `flutter_foreground_task`. `DownloadManager` calls

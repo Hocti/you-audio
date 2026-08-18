@@ -149,7 +149,7 @@ class _MainScaffoldState extends State<MainScaffold> {
   @override
   Widget build(BuildContext context) {
     final tabs = <Widget>[
-      LinkTab(api: _api),
+      LinkTab(api: _api, onPlayTap: _goToPlay),
       ChannelTab(
         key: ValueKey('channel|$_serverUrl|$_accessToken'),
         api: _api,

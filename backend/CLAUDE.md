@@ -55,7 +55,8 @@ silently breaks the other.
 | POST | `/api/download` | Accept a YouTube URL, check cache, start download |
 | POST | `/api/metadata` | Quick title/channel/duration/thumbnail (no audio); upserts a `pending` row + saves the thumbnail so the client can show it before the audio download |
 | GET | `/api/progress/{task_id}` | Poll download/conversion progress |
-| GET | `/api/audio/{video_id}` | Stream the MP3 file |
+| GET | `/api/audio/{video_id}` | Send the whole MP3 file (download-to-device flow) |
+| GET | `/api/stream/{video_id}` | Same MP3 with **real HTTP range support** (206), for the streaming player |
 | GET | `/api/thumbnail/{video_id}` | Serve the thumbnail image |
 | GET | `/api/videos` | Return all downloaded videos as JSON |
 | GET | `/api/channel/resolve?q=…` | Resolve a channel ID from a URL / `@handle` / username / id |
@@ -118,6 +119,49 @@ silently breaks the other.
   then says `restart_required: true`.
 - An `_upgrade_lock` serializes concurrent calls. `GET /api/yt-dlp/version`
   reports what is actually loaded — use it to check before/after.
+
+### PO Token provider (`downloader.py`, `docker-compose.yml`)
+- Separately from stale-version 403s above: YouTube now requires a **PO Token**
+  for most googlevideo.com media URLs, or the download 403s even though
+  extraction succeeded (the format is listed with a URL but not authorized to
+  fetch). This is unrelated to `yt-dlp-ejs`/bun, which solves the URL-signing
+  (nsig) challenge, not this.
+- `bgutil-ytdlp-pot-provider` (pip package, kept current alongside yt-dlp —
+  it's in `_UPGRADE_PACKAGES` and `entrypoint.sh`) is a yt-dlp plugin that
+  fetches a token from a small sidecar HTTP server: the `pot-provider` service
+  in `docker-compose.yml` (image `brainicism/bgutil-ytdlp-pot-provider`).
+  `POT_PROVIDER_URL` env var points yt-dlp at it (`http://pot-provider:4416`
+  in Compose); the plugin's own default (`127.0.0.1:4416`) only works when
+  both processes share a host, which isn't true across Compose services.
+  `make run`'s `pot-provider` target starts the same container locally via
+  `docker run` for non-Docker dev.
+- A token alone isn't sufficient — yt-dlp's default client mix (web,
+  web_safari, android_vr, ...) lists adaptive audio-only formats from clients
+  whose token is scoped differently and still 403s on fetch (see
+  https://github.com/yt-dlp/yt-dlp/issues/12482). Debugging against a real
+  403 found `web_music` (music.youtube.com's client) to be the one client
+  whose adaptive audio URLs actually download once bgutil supplies its token,
+  so `_POT_EXTRACTOR_ARGS` in `downloader.py` pins `youtube:player_client` to
+  it for all three yt-dlp calls (download, subtitles, metadata). If this ever
+  regresses, check *which* client's formats actually download with
+  `yt-dlp -v`, not just which are listed — listed-but-403 is the normal
+  failure mode here.
+
+### Streaming vs. downloading (`/api/stream` vs `/api/audio`)
+- `/api/audio` returns a Starlette `FileResponse`. That response **ignores the
+  `Range` header** — it answers 200 with the entire file while still advertising
+  `Accept-Ranges: bytes`. Verified against a live server: `Range: bytes=1000-2000`
+  came back as 200 with all 15 MB.
+- A client that believes the header (just_audio's caching source does) asks for a
+  range on seek, gets the whole file, and plays it as if it began at the offset.
+  So **`/api/stream/{video_id}`** exists: it parses `Range` itself
+  (`parse_byte_range`) and answers a proper `206` with `Content-Range`, a plain
+  `200` when there is no range, and `416` when the range can't be satisfied.
+- `/api/audio` is deliberately left exactly as it was — the download flow uses it
+  and does a plain GET. Only the new streaming path uses `/api/stream`.
+- Both require a finished (`status == "done"`) row: the endpoint serves a file
+  that already exists. Streaming removes the *device transfer* from the wait, not
+  the yt-dlp/ffmpeg conversion.
 
 ### Subtitle language handling (`downloader.py`)
 - yt-dlp fetches several Chinese variants + English. `_select_subtitle()` prefers
@@ -200,6 +244,7 @@ downloaded again. `tests/test_download_start.py` covers both cases.
 | `DATABASE_URL` | — | Required. PostgreSQL async URL, e.g. `postgresql+asyncpg://user:pass@host/db` |
 | `DATA_DIR` | `/data` | Directory to store audio and thumbnail files |
 | `YOUTUBE_API_KEY` | — | YouTube Data API v3 key, required for `/api/channel/{id}/videos` |
+| `POT_PROVIDER_URL` | `http://127.0.0.1:4416` | Base URL of the `bgutil-ytdlp-pot-provider` sidecar (see PO Token section above). Compose sets this to `http://pot-provider:4416`. |
 
 ---
 

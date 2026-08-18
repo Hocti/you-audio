@@ -6,7 +6,7 @@
 set -e
 
 echo "[entrypoint] Upgrading yt-dlp to latest..."
-pip install --no-cache-dir --upgrade yt-dlp yt-dlp-ejs \
+pip install --no-cache-dir --upgrade yt-dlp yt-dlp-ejs bgutil-ytdlp-pot-provider \
   || echo "[entrypoint] yt-dlp upgrade failed; using the version from the image."
 
 yt-dlp --version 2>/dev/null | sed 's/^/[entrypoint] yt-dlp /' || true

@@ -20,6 +20,11 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
   double _speed = 1.0; // remembered playback speed, applied to every track
   int _lastPosSaveMs = 0; // throttles position writes to ~once per 2s
 
+  /// How much of a *streamed* track has been cached to disk, 0.0–1.0. Null when
+  /// nothing is streaming (a local-file track, or the cache already completed).
+  final ValueNotifier<double?> streamCacheProgress = ValueNotifier(null);
+  StreamSubscription<double>? _streamProgressSub;
+
   static const List<double> speedSteps = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5];
   static const _speedKey = 'playback_speed';
   static const _lastPlayedKey = 'last_played_youtube_id';
@@ -109,6 +114,12 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
   }
 
   Future<void> playVideo(Video video) async {
+    // A local-file track carries no streaming state; drop any listener left
+    // over from a previous playStream so the progress notifier doesn't linger.
+    await _streamProgressSub?.cancel();
+    _streamProgressSub = null;
+    streamCacheProgress.value = null;
+
     _currentVideo = video;
     _markedCompleted = false;
     final prefs = await SharedPreferences.getInstance();
@@ -130,6 +141,71 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
     await _player.setSpeed(_speed); // keep the user's chosen speed across tracks
 
     // Restore saved position
+    final savedPos = await _getSavedPosition(video.youtubeId);
+    if (savedPos > 0 && savedPos < video.duration - 5) {
+      await _player.seek(Duration(seconds: savedPos));
+    }
+
+    await _player.play();
+  }
+
+  /// Play a track straight from the backend while it caches to the device.
+  ///
+  /// Additive — [playVideo] (local file) is untouched and still handles anything
+  /// already in the library. `LockCachingAudioSource` writes to
+  /// `LocalLibrary.audioPath`, so the cache file *is* the library file: once
+  /// [streamCacheProgress] reaches 1.0 the track is an ordinary offline entry
+  /// and [onCached] fires so the caller can add it to `LocalLibrary`.
+  ///
+  /// [url] must be range-capable (`ApiService.streamUrl`, not `audioUrl`) —
+  /// just_audio issues a byte-range request whenever the listener seeks past the
+  /// part it has cached.
+  Future<void> playStream(
+    Video video, {
+    required String url,
+    required Map<String, String> headers,
+    VoidCallback? onCached,
+  }) async {
+    _currentVideo = video;
+    _markedCompleted = false;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('opened_${video.youtubeId}', true);
+    await prefs.setString(_lastPlayedKey, video.youtubeId);
+
+    final thumbFile = LocalLibrary.thumbPath(video.youtubeId);
+    mediaItem.add(MediaItem(
+      id: video.youtubeId,
+      title: video.title,
+      artist: video.channel,
+      duration: Duration(seconds: video.duration),
+      artUri: File(thumbFile).existsSync() ? Uri.file(thumbFile) : null,
+    ));
+
+    // Deliberately using an experimental API: it is the only thing in just_audio
+    // that plays and caches in one pass, and hand-rolling the equivalent means
+    // running our own local HTTP proxy with byte-range bookkeeping. Contained to
+    // this one method — if it ever disappears, only streaming breaks and the
+    // download path keeps working.
+    // ignore: experimental_member_use
+    final source = LockCachingAudioSource(
+      Uri.parse(url),
+      headers: headers,
+      cacheFile: File(LocalLibrary.audioPath(video.youtubeId)),
+    );
+
+    await _streamProgressSub?.cancel();
+    streamCacheProgress.value = 0.0;
+    _streamProgressSub = source.downloadProgressStream.listen((progress) {
+      streamCacheProgress.value = progress;
+      if (progress >= 1.0) {
+        streamCacheProgress.value = null; // done: nothing left to show
+        onCached?.call();
+      }
+    });
+
+    await _player.setAudioSource(source);
+    await _player.setSpeed(_speed);
+
     final savedPos = await _getSavedPosition(video.youtubeId);
     if (savedPos > 0 && savedPos < video.duration - 5) {
       await _player.seek(Duration(seconds: savedPos));
