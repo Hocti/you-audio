@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../models/channel_video.dart';
+import '../models/video.dart';
 import '../services/api_service.dart';
 import '../services/audio_service.dart';
 import '../services/back_interceptor.dart';
@@ -157,6 +158,15 @@ class _ChannelTabState extends State<ChannelTab> {
     _loadBookmarks(); // reflect any bookmark changes made in the detail view
   }
 
+  Future<void> _onReorderBookmarks(int oldIndex, int newIndex) async {
+    setState(() {
+      if (newIndex > oldIndex) newIndex -= 1;
+      final item = _bookmarks.removeAt(oldIndex);
+      _bookmarks.insert(newIndex, item);
+    });
+    await BookmarkService.saveOrder(_bookmarks);
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_channelId == null) {
@@ -176,77 +186,88 @@ class _ChannelTabState extends State<ChannelTab> {
   Widget _buildPasteView(BuildContext context) {
     // One scroll view: the paste header scrolls away with the bookmark list, so
     // on small screens the header doesn't permanently occupy the top half.
+    // Drag handles reorder bookmarks; long-press on the row is still the menu.
     return Scaffold(
       appBar: AppBar(title: const Text('Channel'), centerTitle: true),
-      body: ListView(
+      body: ReorderableListView(
         padding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
-        children: [
-          Icon(Icons.subscriptions_outlined, size: 56,
-              color: Theme.of(context).colorScheme.primary),
-          const SizedBox(height: 12),
-          Text(
-            'Paste a channel ID, a /channel/ URL, or an @handle URL',
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 16),
-          FilledButton.icon(
-            onPressed: _resolving ? null : _pasteChannelId,
-            icon: _resolving
-                ? const SizedBox(
-                    width: 18, height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2))
-                : const Icon(Icons.content_paste),
-            label: Text(_resolving ? 'Resolving…' : 'Paste Channel'),
-            style: FilledButton.styleFrom(
-              minimumSize: const Size(double.infinity, 52),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-          ),
-          if (_pasteError.isNotEmpty) ...[
+        buildDefaultDragHandles: false,
+        onReorder: _onReorderBookmarks,
+        header: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Icon(Icons.subscriptions_outlined, size: 56,
+                color: Theme.of(context).colorScheme.primary),
             const SizedBox(height: 12),
             Text(
-              _pasteError,
+              'Paste a channel ID, a /channel/ URL, or an @handle URL',
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: Theme.of(context).colorScheme.error,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
               textAlign: TextAlign.center,
             ),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: _resolving ? null : _pasteChannelId,
+              icon: _resolving
+                  ? const SizedBox(
+                      width: 18, height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.content_paste),
+              label: Text(_resolving ? 'Resolving…' : 'Paste Channel'),
+              style: FilledButton.styleFrom(
+                minimumSize: const Size(double.infinity, 52),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+            ),
+            if (_pasteError.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Text(
+                _pasteError,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                textAlign: TextAlign.center,
+              ),
+            ],
+            const SizedBox(height: 24),
+            Text('Bookmarked channels',
+                style: Theme.of(context).textTheme.titleSmall),
+            const Divider(),
+            if (_bookmarks.isEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 32),
+                child: Text(
+                  'No bookmarks yet.\nOpen a channel and tap the star to save it.',
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                  textAlign: TextAlign.center,
+                ),
+              ),
           ],
-          const SizedBox(height: 24),
-          Text('Bookmarked channels',
-              style: Theme.of(context).textTheme.titleSmall),
-          const Divider(),
-          ..._buildBookmarkItems(context),
+        ),
+        children: [
+          for (var i = 0; i < _bookmarks.length; i++)
+            _buildBookmarkTile(_bookmarks[i], i),
         ],
       ),
     );
   }
 
-  /// Bookmark rows (or an empty-state message) for the scrollable paste view.
-  List<Widget> _buildBookmarkItems(BuildContext context) {
-    if (_bookmarks.isEmpty) {
-      return [
-        Padding(
-          padding: const EdgeInsets.only(top: 32),
-          child: Text(
-            'No bookmarks yet.\nOpen a channel and tap the star to save it.',
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-            textAlign: TextAlign.center,
-          ),
-        ),
-      ];
-    }
-    return _bookmarks.map((bm) {
-      return ListTile(
+  Widget _buildBookmarkTile(ChannelBookmark bm, int index) {
+    return Material(
+      key: ValueKey(bm.id),
+      color: Colors.transparent,
+      child: ListTile(
         contentPadding: EdgeInsets.zero,
-        leading: const Icon(Icons.star, color: Colors.amber),
+        leading: ReorderableDragStartListener(
+          index: index,
+          child: Icon(Icons.drag_handle,
+              color: Theme.of(context).colorScheme.onSurfaceVariant),
+        ),
         title: Text(bm.name, maxLines: 1, overflow: TextOverflow.ellipsis),
         subtitle: Text(bm.id,
             maxLines: 1,
@@ -259,8 +280,8 @@ class _ChannelTabState extends State<ChannelTab> {
           channelId: bm.id,
           channelName: bm.name,
         ),
-      );
-    }).toList();
+      ),
+    );
   }
 }
 
@@ -457,8 +478,13 @@ class _ChannelDetailViewState extends State<_ChannelDetailView> {
         break;
       case _RowState.none:
       case _RowState.error:
-        DownloadManager.instance
-            .start(widget.api, 'https://www.youtube.com/watch?v=${video.videoId}');
+        DownloadManager.instance.start(
+          widget.api,
+          'https://www.youtube.com/watch?v=${video.videoId}',
+          youtubeId: video.videoId,
+          title: video.title,
+          thumbnailUrl: video.thumbnailUrl,
+        );
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('Downloading "${video.title}"…')),
@@ -649,19 +675,39 @@ class _ChannelDetailViewState extends State<_ChannelDetailView> {
       return const Center(child: Text('No videos found for this channel'));
     }
 
-    final videos = _displayVideos;
-    if (videos.isEmpty) {
+    final matched = _displayVideos;
+    if (matched.isEmpty) {
       return const Center(child: Text('No videos match your search'));
     }
+
+    final visible = matched.where((v) => !v.isCollapsed).toList();
+    final collapsed = matched.where((v) => v.isCollapsed).toList();
 
     // Rebuild as downloads progress/complete so row state/icons stay current.
     return ValueListenableBuilder<List<DownloadJob>>(
       valueListenable: DownloadManager.instance.jobs,
-      builder: (context, jobs, _) => ListView.builder(
-        itemCount: videos.length,
+      builder: (context, jobs, _) => ListView(
         padding: const EdgeInsets.only(bottom: 8),
-        itemBuilder: (context, index) =>
-            _buildVideoTile(videos[index], jobs),
+        children: [
+          for (final video in visible) _buildVideoTile(video, jobs),
+          if (collapsed.isNotEmpty)
+            ExpansionTile(
+              initiallyExpanded: false,
+              title: Text(
+                'Hidden: live / upcoming / members (${collapsed.length})',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+              subtitle: Text(
+                'Members-only, trailers, unreleased, and live videos',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+              ),
+              children: [
+                for (final video in collapsed) _buildVideoTile(video, jobs),
+              ],
+            ),
+        ],
       ),
     );
   }
@@ -669,37 +715,26 @@ class _ChannelDetailViewState extends State<_ChannelDetailView> {
   Widget _buildVideoTile(ChannelVideo video, List<DownloadJob> jobs) {
     final state = _stateFor(video.videoId, jobs);
     final job = _jobFor(video.videoId, jobs);
+    final durationSecs = _durationSeconds(video);
+    final durationText =
+        (durationSecs != null && durationSecs > 0)
+            ? formatDurationSeconds(durationSecs)
+            : null;
+    final date = _formatDate(video.publishedAt);
+    final subtitle = state == _RowState.error && job != null
+        ? 'Download failed — tap to retry'
+        : [
+            if (date.isNotEmpty) date,
+            if (durationText != null) durationText,
+          ].join('  ·  ');
     return ListTile(
       contentPadding:
           const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      leading: ClipRRect(
-        borderRadius: BorderRadius.circular(8),
-        child: SizedBox(
-          width: 80, height: 56,
-          child: video.thumbnailUrl == null
-              ? Container(
-                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                  child: const Icon(Icons.music_note, size: 24),
-                )
-              : CachedNetworkImage(
-                  imageUrl: video.thumbnailUrl!,
-                  fit: BoxFit.cover,
-                  placeholder: (_, __) => Container(
-                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                    child: const Icon(Icons.music_note, size: 24),
-                  ),
-                  errorWidget: (_, __, ___) => Container(
-                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                    child: const Icon(Icons.music_note, size: 24),
-                  ),
-                ),
-        ),
-      ),
+      minLeadingWidth: 80,
+      leading: _thumbnail(video, durationText),
       title: ScrollingText(video.title),
       subtitle: Text(
-        state == _RowState.error && job != null
-            ? 'Download failed — tap to retry'
-            : _formatDate(video.publishedAt),
+        subtitle,
         style: Theme.of(context).textTheme.bodySmall?.copyWith(
               color: state == _RowState.error
                   ? Theme.of(context).colorScheme.error
@@ -709,6 +744,79 @@ class _ChannelDetailViewState extends State<_ChannelDetailView> {
       trailing: _trailingFor(state, job),
       onTap: () => _onTapVideo(video, state),
       onLongPress: () => _showContextMenu(video, state),
+    );
+  }
+
+  /// API duration, or the local-library copy if this video is already on device.
+  int? _durationSeconds(ChannelVideo video) {
+    if (video.duration != null && video.duration! > 0) return video.duration;
+    final local = LocalLibrary.get(video.videoId);
+    if (local != null && local.duration > 0) return local.duration;
+    return video.duration;
+  }
+
+  Widget _thumbnail(ChannelVideo video, String? durationText) {
+    final badgeText = video.liveBroadcast == 'live'
+        ? 'LIVE'
+        : video.liveBroadcast == 'upcoming' || video.duration == 0
+            ? (durationText ?? 'SOON')
+            : durationText;
+    final image = video.thumbnailUrl == null
+        ? ColoredBox(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            child: const Center(child: Icon(Icons.music_note, size: 24)),
+          )
+        : CachedNetworkImage(
+            imageUrl: video.thumbnailUrl!,
+            width: 80,
+            height: 56,
+            fit: BoxFit.cover,
+            placeholder: (_, __) => ColoredBox(
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              child: const Center(child: Icon(Icons.music_note, size: 24)),
+            ),
+            errorWidget: (_, __, ___) => ColoredBox(
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              child: const Center(child: Icon(Icons.music_note, size: 24)),
+            ),
+          );
+    return SizedBox(
+      width: 80,
+      height: 56,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: image,
+            ),
+          ),
+          if (badgeText != null)
+            Positioned(
+              right: 4,
+              bottom: 4,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                decoration: BoxDecoration(
+                  color: video.liveBroadcast == 'live'
+                      ? Colors.red.shade700
+                      : Colors.black87,
+                  borderRadius: BorderRadius.circular(3),
+                ),
+                child: Text(
+                  badgeText,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    height: 1.15,
+                    letterSpacing: 0.2,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 
@@ -782,6 +890,10 @@ class _ChannelDetailViewState extends State<_ChannelDetailView> {
         ('Video ID', video.videoId),
         if (video.publishedAt != null)
           ('Published', _formatDate(video.publishedAt)),
+        if (video.duration != null && video.duration! > 0)
+          ('Duration', formatDurationSeconds(video.duration!)),
+        if (video.liveBroadcast != 'none')
+          ('Broadcast', video.liveBroadcast),
       ],
     );
   }

@@ -60,7 +60,7 @@ silently breaks the other.
 | GET | `/api/thumbnail/{video_id}` | Serve the thumbnail image |
 | GET | `/api/videos` | Return all downloaded videos as JSON |
 | GET | `/api/channel/resolve?q=…` | Resolve a channel ID from a URL / `@handle` / username / id |
-| GET | `/api/channel/{channel_id}/videos` | Return a channel's latest videos (≤50) via YouTube Data API, cached 1h. Shorts (1–60s) and members-only/private videos are filtered out (see `youtube_api._filter_playable`). A **zero** duration means live/upcoming/premiere, not a Short, and is kept. |
+| GET | `/api/channel/{channel_id}/videos` | Return a channel's latest videos (≤50) via YouTube Data API, cached 1h. Shorts (1–60s) and members-only/private videos are filtered out (see `youtube_api._filter_playable`). Each item includes `duration` (seconds) and `live_broadcast` (`none` / `upcoming` / `live`). A **zero** duration means live/upcoming/premiere, not a Short — those stay in the payload so the client can collapse them. |
 | GET | `/api/yt-dlp/version` | yt-dlp version loaded in this process. |
 | GET | `/api/yt-dlp/update` | **Admin only.** pip-upgrade yt-dlp + yt-dlp-ejs and hot-reload them. |
 | GET | `/api/users` | **Admin only.** List users (incl. their tokens). |

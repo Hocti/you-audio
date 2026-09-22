@@ -48,6 +48,9 @@ def get_cached(channel_id: str) -> list[dict] | None:
     fetched_at, videos = entry
     if time.time() - fetched_at >= CACHE_TTL_SECONDS:
         return None
+    # Entries cached before duration was attached must be refetched.
+    if videos and "duration" not in videos[0]:
+        return None
     return videos
 
 
@@ -105,45 +108,51 @@ def _parse_iso8601_duration(value: str | None) -> int | None:
 
 
 async def _filter_playable(client: httpx.AsyncClient, videos: list[dict]) -> list[dict]:
-    """Drop Shorts and members-only/private videos.
+    """Drop Shorts and members-only/private videos; attach duration + live status.
 
-    A batched `videos.list` (1 quota unit) returns `contentDetails.duration` for
-    every accessible video. Videos missing from the response are members-only,
-    private, or deleted (an unauthenticated key can't see them) and are dropped;
-    videos at/under the Shorts length threshold are dropped too.
+    A batched `videos.list` (1 quota unit) returns `contentDetails.duration` and
+    `snippet.liveBroadcastContent` for every accessible video. Videos missing
+    from the response are members-only, private, or deleted (an unauthenticated
+    key can't see them) and are dropped; videos at/under the Shorts length
+    threshold are dropped too.
 
     A zero duration is *not* a Short: live streams, upcoming videos, and
-    premieres report `P0D`. Dropping those made a video the user had just failed
-    to download vanish from the channel list on the next refresh, with no way to
-    see or retry it — so they are kept and left for the download to reject.
+    premieres report `P0D`. Those stay in the payload (with `duration` and
+    `live_broadcast` set) so the client can collapse them instead of silently
+    dropping a video the user just failed to download.
     """
     ids = [v["video_id"] for v in videos if v.get("video_id")]
     if not ids:
         return videos
 
-    durations: dict[str, int | None] = {}
+    extras: dict[str, dict] = {}
     # videos.list accepts up to 50 ids per call; channel lists are already ≤50.
     for start in range(0, len(ids), 50):
         chunk = ids[start : start + 50]
         data = await _get(
             client,
             "videos",
-            {"part": "contentDetails", "id": ",".join(chunk)},
+            {"part": "contentDetails,snippet", "id": ",".join(chunk)},
         )
         for item in data.get("items", []):
-            durations[item["id"]] = _parse_iso8601_duration(
-                item.get("contentDetails", {}).get("duration")
-            )
+            extras[item["id"]] = {
+                "duration": _parse_iso8601_duration(
+                    item.get("contentDetails", {}).get("duration")
+                ),
+                "live_broadcast": item.get("snippet", {}).get("liveBroadcastContent")
+                or "none",
+            }
 
     result: list[dict] = []
     for v in videos:
         vid = v.get("video_id")
-        if vid not in durations:
+        if vid not in extras:
             continue  # members-only / private / deleted -> not accessible
-        secs = durations[vid]
+        info = extras[vid]
+        secs = info["duration"]
         if secs is not None and 0 < secs <= _SHORTS_MAX_SECONDS:
             continue  # Short (a 0 here means live/upcoming, not a Short)
-        result.append(v)
+        result.append({**v, "duration": secs, "live_broadcast": info["live_broadcast"]})
     return result
 
 
@@ -151,7 +160,8 @@ async def fetch_latest_videos(channel_id: str) -> list[dict]:
     """Fetch up to MAX_RESULTS latest videos for a channel, using the cache.
 
     Returns a list of dicts: video_id, title, published_at, thumbnail_url,
-    channel_name. Raises YouTubeApiError on misconfiguration or API failure.
+    channel_name, duration, live_broadcast. Raises YouTubeApiError on
+    misconfiguration or API failure.
     """
     cached = get_cached(channel_id)
     if cached is not None:

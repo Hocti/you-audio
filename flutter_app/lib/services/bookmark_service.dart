@@ -43,14 +43,15 @@ class BookmarkService {
     return (await load()).any((e) => e.id == id);
   }
 
-  /// Adds the bookmark, or updates its name if the id already exists.
+  /// Adds the bookmark at the top, or updates its name if the id already exists
+  /// (position is kept on update).
   static Future<void> add(ChannelBookmark bm) async {
     final items = await load();
     final idx = items.indexWhere((e) => e.id == bm.id);
     if (idx >= 0) {
       items[idx] = bm;
     } else {
-      items.add(bm);
+      items.insert(0, bm);
     }
     await _save(items);
   }
@@ -60,6 +61,9 @@ class BookmarkService {
     items.removeWhere((e) => e.id == id);
     await _save(items);
   }
+
+  /// Persist a caller-reordered list (drag-and-drop on the Channel tab).
+  static Future<void> saveOrder(List<ChannelBookmark> items) => _save(items);
 }
 
 /// Extracts a `UC…` channel id from a bare id or any URL containing

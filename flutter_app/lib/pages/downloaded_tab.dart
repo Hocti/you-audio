@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/local_video.dart';
@@ -90,10 +91,16 @@ class _DownloadedTabState extends State<DownloadedTab> {
     final progressMap = <String, int>{};
     final completedMap = <String, bool>{};
     for (final v in videos) {
-      final pos = prefs.getInt('progress_${v.youtubeId}');
-      if (pos != null) progressMap[v.youtubeId] = pos;
-      completedMap[v.youtubeId] =
-          prefs.getBool('completed_${v.youtubeId}') ?? false;
+      final current = prefs.getInt('progress_${v.youtubeId}') ?? 0;
+      final maxP = prefs.getInt('max_progress_${v.youtubeId}') ?? 0;
+      final completed = prefs.getBool('completed_${v.youtubeId}') ?? false;
+      completedMap[v.youtubeId] = completed;
+      // Display the furthest the user has ever reached, not the resume point.
+      var shown = maxP > current ? maxP : current;
+      if (completed && v.duration > shown) shown = v.duration;
+      if (shown > 0 || completed) {
+        progressMap[v.youtubeId] = shown;
+      }
     }
     if (mounted) {
       setState(() {
@@ -296,10 +303,11 @@ class _DownloadedTabState extends State<DownloadedTab> {
     }
   }
 
-  String _formatProgress(int seconds, int totalDuration) {
+  String _formatProgress(int seconds, int totalDuration, {bool completed = false}) {
+    if (completed) return '100% played';
     if (seconds <= 0) return 'Not started';
     if (totalDuration > 0) {
-      final pct = (seconds / totalDuration * 100).round();
+      final pct = (seconds / totalDuration * 100).round().clamp(1, 99);
       return '$pct% played';
     }
     final m = seconds ~/ 60;
@@ -463,30 +471,11 @@ class _DownloadedTabState extends State<DownloadedTab> {
 
   Widget _buildJobTile(DownloadJob job) {
     final isError = job.stage == DownloadStage.error;
-    // The metadata-first flow pulls the thumbnail to the device before the
-    // audio, so show it as soon as it's available.
-    final thumb = job.youtubeId.isEmpty
-        ? null
-        : File(LocalLibrary.thumbPath(job.youtubeId));
-    final hasThumb = thumb != null && thumb.existsSync();
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      leading: ClipRRect(
-        borderRadius: BorderRadius.circular(8),
-        child: SizedBox(
-          width: 80, height: 56,
-          child: hasThumb
-              ? Image.file(thumb, fit: BoxFit.cover)
-              : Container(
-                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                  child: Icon(isError ? Icons.error_outline : Icons.downloading,
-                      color: isError
-                          ? Theme.of(context).colorScheme.error
-                          : Colors.amber),
-                ),
-        ),
-      ),
-      title: ScrollingText(job.title),
+      leading: _jobLeading(job),
+      title: ScrollingText(
+          job.title.isEmpty ? 'Downloading…' : job.title),
       subtitle: Text(_stageLabel(job),
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
@@ -519,10 +508,50 @@ class _DownloadedTabState extends State<DownloadedTab> {
     );
   }
 
+  Widget _jobLeading(DownloadJob job) {
+    final isError = job.stage == DownloadStage.error;
+    final thumb = job.youtubeId.isEmpty
+        ? null
+        : File(LocalLibrary.thumbPath(job.youtubeId));
+    final networkUrl = job.thumbnailUrl ??
+        (job.youtubeId.isNotEmpty ? youtubeThumbnailUrl(job.youtubeId) : null);
+
+    Widget child;
+    if (thumb != null && thumb.existsSync()) {
+      child = Image.file(thumb, fit: BoxFit.cover);
+    } else if (networkUrl != null) {
+      child = CachedNetworkImage(
+        imageUrl: networkUrl,
+        fit: BoxFit.cover,
+        placeholder: (_, __) => _jobPlaceholder(isError),
+        errorWidget: (_, __, ___) => _jobPlaceholder(isError),
+      );
+    } else {
+      child = _jobPlaceholder(isError);
+    }
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: SizedBox(width: 80, height: 56, child: child),
+    );
+  }
+
+  Widget _jobPlaceholder(bool isError) {
+    return Container(
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      child: Icon(isError ? Icons.error_outline : Icons.downloading,
+          color: isError
+              ? Theme.of(context).colorScheme.error
+              : Colors.amber),
+    );
+  }
+
   void _retry(DownloadJob job) {
     DownloadManager.instance.start(
       widget.api,
       'https://www.youtube.com/watch?v=${job.youtubeId}',
+      youtubeId: job.youtubeId,
+      title: job.title,
+      thumbnailUrl: job.thumbnailUrl,
     );
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Retrying "${job.title}"…')),
@@ -586,7 +615,12 @@ class _DownloadedTabState extends State<DownloadedTab> {
               ],
               if (progress != null) ...[
                 const SizedBox(width: 8),
-                Text(_formatProgress(progress, video.duration),
+                Text(
+                    _formatProgress(
+                      progress,
+                      video.duration,
+                      completed: _completedMap[video.youtubeId] ?? false,
+                    ),
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
                           color: Theme.of(context).colorScheme.primary)),
               ],

@@ -104,6 +104,10 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
           _markedCompleted = true;
           final prefs = await SharedPreferences.getInstance();
           await prefs.setBool('completed_${_currentVideo!.youtubeId}', true);
+          // Treat a near-end listen as a full play for the high-water mark.
+          final maxKey = 'max_progress_${_currentVideo!.youtubeId}';
+          final prevMax = prefs.getInt(maxKey) ?? 0;
+          if (dur > prevMax) await prefs.setInt(maxKey, dur);
         }
       }
     });
@@ -258,9 +262,16 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
 
   Future<void> _onTrackCompleted() async {
     if (_currentVideo != null) {
+      final id = _currentVideo!.youtubeId;
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool('completed_${_currentVideo!.youtubeId}', true);
-      await _savePosition(_currentVideo!.youtubeId, 0);
+      await prefs.setBool('completed_$id', true);
+      final dur = _currentVideo!.duration;
+      final prevMax = prefs.getInt('max_progress_$id') ?? 0;
+      if (dur > prevMax) {
+        await prefs.setInt('max_progress_$id', dur);
+      }
+      // Resume from the start next time, but keep the high-water mark.
+      await _savePosition(id, 0);
     }
     // Auto-play next unplayed track
     await playNextUnplayed();
@@ -310,6 +321,13 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
   Future<void> _savePosition(String videoId, int seconds) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt('progress_$videoId', seconds);
+    // High-water mark: how far the user has ever reached, even if they later
+    // seek back or replay from the start. Never lowered.
+    final maxKey = 'max_progress_$videoId';
+    final prevMax = prefs.getInt(maxKey) ?? 0;
+    if (seconds > prevMax) {
+      await prefs.setInt(maxKey, seconds);
+    }
   }
 
   Future<int> _getSavedPosition(String videoId) async {

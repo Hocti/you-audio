@@ -73,6 +73,8 @@ class ChannelVideoOut(BaseModel):
     published_at: str | None = None
     thumbnail_url: str | None = None
     channel_name: str | None = None
+    duration: int | None = None  # seconds; 0 = live / upcoming / premiere
+    live_broadcast: str | None = None  # none | upcoming | live
 
 
 class ChannelVideosResponse(BaseModel):

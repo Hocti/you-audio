@@ -21,6 +21,8 @@ class DownloadJob {
   DownloadStage stage;
   double percent; // 0..1
   String? error;
+  /// YouTube CDN (or other) thumbnail URL, used until the local file exists.
+  String? thumbnailUrl;
 
   DownloadJob({
     required this.id,
@@ -29,6 +31,7 @@ class DownloadJob {
     this.stage = DownloadStage.checking,
     this.percent = 0,
     this.error,
+    this.thumbnailUrl,
   });
 }
 
@@ -70,7 +73,12 @@ class DownloadManager {
       _failedPrefsKey,
       jsonEncode([
         for (final j in failed)
-          {'youtube_id': j.youtubeId, 'title': j.title, 'error': j.error},
+          {
+            'youtube_id': j.youtubeId,
+            'title': j.title,
+            'error': j.error,
+            'thumbnail_url': j.thumbnailUrl,
+          },
       ]),
     );
   }
@@ -102,6 +110,8 @@ class DownloadManager {
             title: m['title'] as String? ?? 'Download failed',
             stage: DownloadStage.error,
             error: m['error'] as String?,
+            thumbnailUrl: m['thumbnail_url'] as String? ??
+                (id.isNotEmpty ? youtubeThumbnailUrl(id) : null),
           ),
         );
       }
@@ -161,9 +171,22 @@ class DownloadManager {
     _persistFailed();
   }
 
-  Future<void> start(ApiService api, String url) async {
+  Future<void> start(
+    ApiService api,
+    String url, {
+    String? youtubeId,
+    String? title,
+    String? thumbnailUrl,
+  }) async {
     await LocalLibrary.ensureInitialized();
-    final job = DownloadJob(id: _nextId++);
+    final knownId = youtubeId ?? extractYoutubeVideoId(url) ?? '';
+    final job = DownloadJob(
+      id: _nextId++,
+      youtubeId: knownId,
+      title: (title != null && title.isNotEmpty) ? title : 'Downloading…',
+      thumbnailUrl: thumbnailUrl ??
+          (knownId.isNotEmpty ? youtubeThumbnailUrl(knownId) : null),
+    );
     _list.insert(0, job);
     _publish();
     await _startService();
@@ -179,9 +202,11 @@ class DownloadManager {
       final youtubeId = (meta?['youtube_id'] as String?) ??
           (respVideo?['youtube_id'] as String?) ??
           '';
-      job.youtubeId = youtubeId;
+      if (youtubeId.isNotEmpty) job.youtubeId = youtubeId;
       final title = (meta?['title'] as String?) ?? (respVideo?['title'] as String?);
       if (title != null) job.title = title;
+      job.thumbnailUrl ??=
+          youtubeId.isNotEmpty ? youtubeThumbnailUrl(youtubeId) : null;
       _clearFailedFor(youtubeId, job);
       _publish();
 
@@ -228,6 +253,8 @@ class DownloadManager {
       if (youtubeId.isNotEmpty) job.youtubeId = youtubeId;
       final title = meta['title'] as String?;
       if (title != null && title.isNotEmpty) job.title = title;
+      job.thumbnailUrl ??=
+          youtubeId.isNotEmpty ? youtubeThumbnailUrl(youtubeId) : null;
       _clearFailedFor(youtubeId, job);
       _publish();
 
@@ -317,3 +344,16 @@ class DownloadManager {
     ));
   }
 }
+
+/// Best-effort 11-char id from a watch / youtu.be / shorts / live / embed URL.
+String? extractYoutubeVideoId(String input) {
+  final m = RegExp(
+    r'(?:v=|/live/|/shorts/|/embed/|youtu\.be/)([0-9A-Za-z_-]{11})',
+  ).firstMatch(input);
+  return m?.group(1);
+}
+
+/// Public YouTube CDN thumbnail — no access token needed.
+String youtubeThumbnailUrl(String videoId) =>
+    'https://i.ytimg.com/vi/$videoId/mqdefault.jpg';
+
