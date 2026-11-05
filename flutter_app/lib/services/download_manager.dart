@@ -180,6 +180,18 @@ class DownloadManager {
   }) async {
     await LocalLibrary.ensureInitialized();
     final knownId = youtubeId ?? extractYoutubeVideoId(url) ?? '';
+    // Already running for this video: don't start a second, parallel job.
+    if (knownId.isNotEmpty &&
+        _list.any((j) =>
+            j.youtubeId == knownId && j.stage != DownloadStage.error)) {
+      return;
+    }
+    // A retry replaces the failed row in place (same position in the list)
+    // the instant it starts, rather than adding a second row beside it.
+    final failedIndex = knownId.isEmpty
+        ? -1
+        : _list.indexWhere((j) =>
+            j.youtubeId == knownId && j.stage == DownloadStage.error);
     final job = DownloadJob(
       id: _nextId++,
       youtubeId: knownId,
@@ -187,8 +199,15 @@ class DownloadManager {
       thumbnailUrl: thumbnailUrl ??
           (knownId.isNotEmpty ? youtubeThumbnailUrl(knownId) : null),
     );
-    _list.insert(0, job);
-    _publish();
+    if (failedIndex >= 0) {
+      _list[failedIndex] = job;
+      _clearFailedFor(knownId, job); // any other stale failures for this id
+      _publish();
+      await _persistFailed();
+    } else {
+      _list.insert(0, job);
+      _publish();
+    }
     await _startService();
 
     try {
@@ -235,6 +254,9 @@ class DownloadManager {
     } catch (e) {
       job.stage = DownloadStage.error;
       job.error = e.toString();
+      // The id may only have become known mid-run (pasted URL); keep one
+      // failed row per video either way.
+      _clearFailedFor(job.youtubeId, job);
       _publish();
       await _persistFailed();
     } finally {

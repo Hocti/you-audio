@@ -21,6 +21,48 @@ Future<void> copyYoutubeLink(BuildContext context, String youtubeId) async {
   }
 }
 
+Future<void> copyVideoId(BuildContext context, String youtubeId) async {
+  await Clipboard.setData(ClipboardData(text: youtubeId));
+  if (context.mounted) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Video ID copied: $youtubeId')),
+    );
+  }
+}
+
+/// "Copy video ID" + "Copy channel ID" rows for a video's long-press menu.
+/// [sheetContext] is the bottom sheet's context (popped before copying);
+/// [context] is the page's, used for the SnackBar. The channel row is left
+/// out when the id isn't known.
+List<Widget> copyIdMenuTiles(
+  BuildContext context,
+  BuildContext sheetContext, {
+  required String youtubeId,
+  String? channelId,
+}) {
+  return [
+    ListTile(
+      leading: const Icon(Icons.tag),
+      title: const Text('Copy video ID'),
+      subtitle: Text(youtubeId),
+      onTap: () {
+        Navigator.pop(sheetContext);
+        copyVideoId(context, youtubeId);
+      },
+    ),
+    if (channelId != null && channelId.isNotEmpty)
+      ListTile(
+        leading: const Icon(Icons.account_box_outlined),
+        title: const Text('Copy channel ID'),
+        subtitle: Text(channelId, maxLines: 1, overflow: TextOverflow.ellipsis),
+        onTap: () {
+          Navigator.pop(sheetContext);
+          copyChannelId(context, channelId);
+        },
+      ),
+  ];
+}
+
 /// Copies the bare `UC…` id — that is what the app's own channel input takes,
 /// so it is more useful here than the full URL.
 Future<void> copyChannelId(BuildContext context, String channelId) async {

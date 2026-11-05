@@ -139,17 +139,24 @@ class ApiService {
     throw Exception('resolve failed: ${resp.statusCode}');
   }
 
-  Future<List<ChannelVideo>> getChannelVideos(String channelId) async {
-    final resp = await http.get(
-      Uri.parse('$_base/api/channel/$channelId/videos'),
-      headers: _headers,
+  /// One page of a channel's uploads (≈50 before Shorts are removed). Pass the
+  /// previous page's [ChannelPage.nextPageToken] to get the next one.
+  Future<ChannelPage> getChannelVideos(String channelId,
+      {String? pageToken}) async {
+    final uri = Uri.parse('$_base/api/channel/$channelId/videos').replace(
+      queryParameters:
+          pageToken == null ? null : {'page_token': pageToken},
     );
+    final resp = await http.get(uri, headers: _headers);
     if (resp.statusCode == 200) {
       final body = jsonDecode(resp.body) as Map<String, dynamic>;
       final list = (body['videos'] as List<dynamic>?) ?? const <dynamic>[];
-      return list
-          .map((j) => ChannelVideo.fromJson(j as Map<String, dynamic>))
-          .toList();
+      return ChannelPage(
+        list
+            .map((j) => ChannelVideo.fromJson(j as Map<String, dynamic>))
+            .toList(),
+        body['next_page_token'] as String?,
+      );
     }
     throw Exception('getChannelVideos failed: ${resp.statusCode}');
   }

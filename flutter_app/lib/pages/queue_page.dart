@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
 import '../models/video.dart';
 import '../services/audio_service.dart';
+import '../services/local_library.dart';
+import '../services/playback_progress.dart';
+import '../widgets/video_actions.dart';
+import '../widgets/video_thumbnail.dart';
 import '../widgets/scrolling_text.dart';
 
 /// "Up Next" queue: the tracks the user added via "Add to Queue". They can be
@@ -69,6 +73,8 @@ class QueuePage extends StatelessWidget {
           return ReorderableListView.builder(
             itemCount: q.length,
             onReorder: handler.reorderQueue,
+            // Reorder via the handle only; long-press opens the copy menu.
+            buildDefaultDragHandles: false,
             padding: const EdgeInsets.only(bottom: 8),
             itemBuilder: (context, index) {
               final v = q[index];
@@ -76,14 +82,26 @@ class QueuePage extends StatelessWidget {
                 // Per-instance key so identical videos queued twice stay distinct
                 // and reordering animates correctly.
                 key: ObjectKey(v),
-                leading: CircleAvatar(
-                  radius: 14,
-                  child: Text('${index + 1}',
-                      style: const TextStyle(fontSize: 12)),
+                contentPadding: const EdgeInsets.only(left: 16),
+                minLeadingWidth: VideoThumbnail.width,
+                leading: VideoThumbnail(
+                  filePath: LocalLibrary.thumbPath(v.youtubeId),
+                  badge: v.duration > 0 ? v.durationFormatted : null,
+                  progress: PlaybackProgress.fraction(v.youtubeId, v.duration),
                 ),
                 title: ScrollingText(v.title),
-                subtitle: Text(v.channel,
+                subtitle: Text('${index + 1}  ·  ${v.channel}',
                     maxLines: 1, overflow: TextOverflow.ellipsis),
+                onLongPress: () => showModalBottomSheet(
+                  context: context,
+                  builder: (ctx) => SafeArea(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: copyIdMenuTiles(context, ctx,
+                          youtubeId: v.youtubeId, channelId: v.channelId),
+                    ),
+                  ),
+                ),
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [

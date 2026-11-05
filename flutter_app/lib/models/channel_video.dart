@@ -4,6 +4,14 @@ import 'video.dart';
 ///
 /// Unlike [Video], the thumbnail is a direct YouTube CDN URL (not a backend
 /// path), so it needs no access token to load.
+/// One page of `GET /api/channel/{id}/videos`. A null [nextPageToken] means
+/// there are no more pages.
+class ChannelPage {
+  final List<ChannelVideo> videos;
+  final String? nextPageToken;
+  const ChannelPage(this.videos, this.nextPageToken);
+}
+
 class ChannelVideo {
   final String videoId;
   final String title;
@@ -15,6 +23,8 @@ class ChannelVideo {
   final int? duration;
   /// YouTube `liveBroadcastContent`: `none`, `upcoming`, or `live`.
   final String liveBroadcast;
+  /// In the channel's members-only playlist (server-side UUMO check).
+  final bool membersOnly;
 
   const ChannelVideo({
     required this.videoId,
@@ -24,6 +34,7 @@ class ChannelVideo {
     this.thumbnailUrl,
     this.duration,
     this.liveBroadcast = 'none',
+    this.membersOnly = false,
   });
 
   factory ChannelVideo.fromJson(Map<String, dynamic> json) {
@@ -35,6 +46,7 @@ class ChannelVideo {
       thumbnailUrl: json['thumbnail_url'] as String?,
       duration: _readDuration(json['duration']),
       liveBroadcast: json['live_broadcast'] as String? ?? 'none',
+      membersOnly: json['members_only'] as bool? ?? false,
     );
   }
 
@@ -50,7 +62,7 @@ class ChannelVideo {
     if (liveBroadcast == 'live' || liveBroadcast == 'upcoming') return true;
     if (duration == 0) return true; // live / premiere with P0D
     if (_publishedInTheFuture) return true;
-    if (looksMembersOnly) return true;
+    if (membersOnly || looksMembersOnly) return true;
     return false;
   }
 
@@ -61,6 +73,7 @@ class ChannelVideo {
     return dt.isAfter(DateTime.now());
   }
 
+  /// Title heuristic, a fallback for the server's [membersOnly] flag.
   bool get looksMembersOnly {
     final t = title.toLowerCase();
     return t.contains('會員獨家') ||

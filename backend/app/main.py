@@ -49,7 +49,7 @@ from .schemas import (
 )
 from .youtube_api import (
     YouTubeApiError,
-    fetch_latest_videos,
+    fetch_channel_page,
     get_cached,
     resolve_channel,
 )
@@ -660,19 +660,24 @@ async def resolve_channel_route(
 async def channel_videos(
     channel_id: str,
     request: Request,
+    page_token: str | None = None,
     user: User = Depends(get_current_user),
 ):
+    """One page of a channel's uploads. Pass the previous response's
+    `next_page_token` as `page_token` to get the next page (null = no more)."""
     async with log_operation(user, request, channel_id):
-        cached = get_cached(channel_id) is not None
+        cached = get_cached(channel_id, page_token) is not None
         try:
-            videos = await fetch_latest_videos(channel_id)
+            page = await fetch_channel_page(channel_id, page_token)
         except YouTubeApiError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.detail)
 
+        videos = page["videos"]
         return ChannelVideosResponse(
             channel_id=channel_id,
             cached=cached,
             total=len(videos),
+            next_page_token=page["next_page_token"],
             videos=[ChannelVideoOut(**v) for v in videos],
         )
 

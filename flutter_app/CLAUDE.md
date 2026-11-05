@@ -38,6 +38,7 @@ flutter_app/
 │   │   ├── share_handler.dart         # OS share-intent bridge + URL classification
 │   │   ├── back_interceptor.dart      # Lets a tab claim the Android back press
 │   │   ├── download_foreground_service.dart # Android foreground svc keeping downloads alive
+│   │   ├── playback_progress.dart     # Sync read of progress_/max_progress_/completed_ prefs (list progress bars)
 │   │   └── audio_service.dart         # Background audio playback logic
 │   ├── pages/
 │   │   ├── server_setup_page.dart     # Setup screen: enter backend URL + access token
@@ -50,6 +51,7 @@ flutter_app/
 │   └── widgets/
 │       ├── player_bar.dart            # Persistent bottom player bar (shown in tabs 1–3)
 │       ├── scrolling_text.dart        # Single-line, horizontally-scrollable text (long titles)
+│       ├── video_thumbnail.dart       # Shared list thumbnail: length badge (bottom-left) + red progress bar
 │       └── video_actions.dart         # Shared menu actions: copy link / open in YouTube / detail sheet
 ├── android/
 │   └── app/src/main/
@@ -88,7 +90,7 @@ flutter_app/
   - **Paste view**: a "Paste Channel" button that reads the clipboard. A bare/embedded `UC…` id is used directly (`extractChannelId`); anything else (a `/channel/` URL, `@handle` URL, `/user/`, `/c/`) is resolved to a channel id via `ApiService.resolveChannel()` → `GET /api/channel/resolve`. Below the button is a scrollable list of bookmarked channels (`BookmarkService`, SharedPreferences).
     The paste header is part of the same scroll view as the bookmark list (one `ReorderableListView`), so on small screens the header scrolls away instead of permanently occupying the top half.
     Bookmarks can be **drag-reordered** via the handle on each row; a newly starred channel is inserted at the **top**. Long-press a bookmarked channel (or the channel name in the AppBar of the detail view) for `showChannelContextMenu`: **Copy channel ID** (the bare `UC…`, which is what the app's own channel input accepts) and **Open channel in YouTube**.
-  - **Detail view**: lists the channel's latest videos via `ApiService.getChannelVideos(channelId)` (Shorts + members-only already filtered server-side). Each row shows duration as a badge on the thumbnail. Live, upcoming/unreleased, and members-only titles are **collapsed** into a bottom "Hidden" section. Back button + a star toggle (AppBar action) to bookmark the channel. A **search icon** filters the list by title. Video titles use `ScrollingText`. Long-press a video for a context menu: **Download audio**, **Stream audio** (see `StreamManager` — opt-in from this menu only; tapping a row still downloads), **Copy YouTube link**, **Open in YouTube**, **Detail**.
+  - **Detail view**: lists the channel's videos via `ApiService.getChannelVideos(channelId, pageToken:)` (Shorts dropped server-side). **Infinite scroll**: the next page (≈50) loads when the list is within 600px of the bottom; a post-frame check also loads more when a page is too short to scroll (e.g. mostly hidden rows). A load-more failure shows a retry row in the footer. Members-only (server `members_only` flag, or the title heuristic), live, and upcoming/unreleased videos are **hidden** by default; a banner at the top shows how many, and it and the AppBar eye icon toggle showing them. Back button + a star toggle (AppBar action) to bookmark the channel. A **search icon** filters the list by title. Video titles use `ScrollingText`. Long-press a video for a context menu: **Download audio**, **Stream audio** (see `StreamManager` — opt-in from this menu only; tapping a row still downloads), **Copy video ID**, **Copy channel ID**, **Copy YouTube link**, **Open in YouTube**, **Detail**.
 - Tapping a video acts by per-row state (`_RowState`): **none** → start a download; **downloading** → "already downloading"; **downloaded** → play it; **playing** → jump to the Play tab. Trailing icon reflects the state (download / spinner / download_done / equalizer / error). The list rebuilds from `DownloadManager.instance.jobs` so icons update live.
 - Channel thumbnails are direct YouTube CDN URLs, so they need no access token.
 - Not yet implemented: YouTube OAuth login / subscribed-channel browsing.
@@ -96,11 +98,12 @@ flutter_app/
 ### Tab 3 — `downloaded_tab.dart`
 - Reads the **local library** via `LocalLibrary.all()` (offline; no backend call) and listens to `DownloadManager.instance.jobs` to show in-progress download rows at the top. A **failed** row shows the error and carries **Retry** (needs `api`, passed in from `MainScaffold`) + **Dismiss** buttons; it survives an app restart (see `DownloadManager` below).
 - Thumbnails load from local files (`Image.file`).
+- **Every video list** (Channel detail, Downloaded incl. job rows, Up Next) uses the shared `VideoThumbnail`: video length badge bottom-left, red listen-progress bar along the bottom (furthest point reached, full once completed — `PlaybackProgress`), and long-press offers Copy video ID / Copy channel ID (`copyIdMenuTiles` in `video_actions.dart`). Length is **not** repeated in the row text.
 - Filter dropdown: **All / Unlistened / Listened** (based on `completed_*` SharedPreferences keys).
 - In-progress and failed download rows show the video **title and thumbnail** as soon as the id is known (channel downloads pass them in immediately; pasted URLs use the YouTube CDN thumbnail until the local file exists).
 - Sort dropdown: by date, channel, or listen status, plus an asc/desc arrow toggle (`_sortAsc`). Re-picking the current sort type or tapping the arrow flips direction; the default is descending (newest-first).
 - A **search icon** in the AppBar expands into a text field that live-filters the list by title.
-- Tap a track to play it (local file); long-press for a context menu: **Add to Queue**, **Copy YouTube link**, **Open in YouTube**, **Open channel** (jumps to the Channel tab on this video's channel — uses the stored `channelId`, else resolves by channel name), **Detail** (scrollable metadata modal with a Close button), **Delete from device**.
+- Tap a track to play it (local file); long-press for a context menu: **Add to Queue**, **Copy video ID**, **Copy channel ID** (when known), **Copy YouTube link**, **Open in YouTube**, **Open channel** (jumps to the Channel tab on this video's channel — uses the stored `channelId`, else resolves by channel name), **Detail** (scrollable metadata modal with a Close button), **Delete from device**.
 - **Swipe a row left** to delete: the red **Delete** background appears only once the drag passes a ~100px threshold; releasing past it removes the track (with a SnackBar, no confirm dialog), releasing before it snaps back. Implemented with `Dismissible` (`onUpdate` tracks drag progress; `dismissThresholds` ≈ 100px/width).
 - **Play Next** calls `audioHandler.queueNext(video)`.
 - **Delete from device** calls `LocalLibrary.remove(youtubeId)` (removes local files only; the backend copy is untouched).
@@ -179,8 +182,11 @@ flutter_app/
   foreground service stops the instant one fails and Android is free to kill the
   process, so every trace of a failed download disappeared from **both** the
   Channel and Downloaded tabs and the video looked as if it had never been tried.
-  `_clearFailedFor` drops the saved failure when the same video is retried, and
-  entries already in `LocalLibrary` are dropped on restore.
+  **Retry replaces the failed row in place** the instant `start()` is called with
+  a known id (same list position, failure removed from prefs), so there is only
+  ever one row per video; `start()` is a no-op if that video is already
+  downloading. `_clearFailedFor` also runs once the id is known (pasted URLs)
+  and on a repeat failure. Entries already in `LocalLibrary` are dropped on restore.
 
 ### `StreamManager` (`lib/services/stream_manager.dart`)
 - Sibling of `DownloadManager`, **not** a replacement — downloading stays the
@@ -225,7 +231,7 @@ Constructor: `ApiService(serverUrl, {accessToken})`. All methods include `X-Acce
 | `getVideos()` | GET | `/api/videos` |
 | `getVideoStatuses()` | GET | `/api/videos` (returns `youtube_id`→status map) |
 | `getVideoMeta(youtubeId)` | GET | `/api/videos` (single video, filtered) |
-| `getChannelVideos(channelId)` | GET | `/api/channel/{channelId}/videos` |
+| `getChannelVideos(channelId, {pageToken})` | GET | `/api/channel/{channelId}/videos?page_token=…` → `ChannelPage(videos, nextPageToken)` |
 | `resolveChannel(input)` | GET | `/api/channel/resolve?q=…` (URL/@handle → id) |
 | `downloadAudioBytes(youtubeId)` | GET | `/api/audio/{youtubeId}` (bytes, with token) |
 | `downloadThumbnailBytes(youtubeId)` | GET | `/api/thumbnail/{youtubeId}` (bytes, with token) |

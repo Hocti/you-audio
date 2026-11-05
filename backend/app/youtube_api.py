@@ -16,9 +16,11 @@ CACHE_TTL_SECONDS = 3600
 # Max records returned per request (YouTube Data API caps maxResults at 50).
 MAX_RESULTS = 50
 
-# In-memory cache: { channel_id: (fetched_at_epoch, [video dicts]) }.
-# Plain dict like progress_store -- cleared on server restart.
-_channel_cache: dict[str, tuple[float, list[dict]]] = {}
+# In-memory caches, cleared on server restart (like progress_store).
+# Pages: { (channel_id, page_token): (fetched_at, page dict) }.
+_page_cache: dict[tuple[str, str], tuple[float, dict]] = {}
+# Auto-generated filter playlists: { (channel_id, prefix): (fetched_at, _AuxPlaylist) }.
+_aux_cache: dict[tuple[str, str], tuple[float, "_AuxPlaylist"]] = {}
 
 
 class YouTubeApiError(Exception):
@@ -40,18 +42,15 @@ def _api_key() -> str:
     return key
 
 
-def get_cached(channel_id: str) -> list[dict] | None:
-    """Return cached videos if present and still fresh, else None."""
-    entry = _channel_cache.get(channel_id)
+def get_cached(channel_id: str, page_token: str | None = None) -> dict | None:
+    """Return a cached page if present and still fresh, else None."""
+    entry = _page_cache.get((channel_id, page_token or ""))
     if entry is None:
         return None
-    fetched_at, videos = entry
+    fetched_at, page = entry
     if time.time() - fetched_at >= CACHE_TTL_SECONDS:
         return None
-    # Entries cached before duration was attached must be refetched.
-    if videos and "duration" not in videos[0]:
-        return None
-    return videos
+    return page
 
 
 async def _get(client: httpx.AsyncClient, path: str, params: dict) -> dict:
@@ -63,7 +62,8 @@ async def _get(client: httpx.AsyncClient, path: str, params: dict) -> dict:
             message = resp.json()["error"]["message"]
         except Exception:
             message = resp.text
-        raise YouTubeApiError(502, f"YouTube API error: {message}")
+        status = 404 if resp.status_code == 404 else 502
+        raise YouTubeApiError(status, f"YouTube API error: {message}")
     return resp.json()
 
 
@@ -87,9 +87,110 @@ def _best_thumbnail(thumbnails: dict) -> str | None:
     return None
 
 
-# Videos at or under this length are treated as Shorts and filtered out.
-# (Heuristic — some Shorts now run longer, but duration is the cheapest signal.)
+# ---------------------------------------------------------------------------
+# Shorts / members-only detection via YouTube's auto-generated playlists
+# ---------------------------------------------------------------------------
+#
+# Every channel has hidden system playlists next to its uploads list (UU…):
+#   UUSH… = Shorts (YouTube's own classification: vertical + short)
+#   UUMO… = members-only videos
+# A members-only video is returned by videos.list like any public video, so
+# these playlists are the only reliable signal for an unauthenticated key.
+# A channel with no Shorts / members content returns 404 for that playlist.
+
+SHORTS_PREFIX = "UUSH"
+MEMBERS_PREFIX = "UUMO"
+
+# Fallback when the Shorts playlist can't be read: at/under this length = Short.
 _SHORTS_MAX_SECONDS = 60
+
+# The system playlists are only roughly date-ordered, so keep reading until
+# their oldest entry is this much older than the page being filtered.
+_AUX_MARGIN_SECONDS = 30 * 86400
+# Hard cap on aux pages read per request (each costs 1 quota unit).
+_AUX_MAX_PAGES_PER_CALL = 10
+
+
+def _aux_playlist_id(channel_id: str, prefix: str) -> str:
+    return prefix + channel_id[2:]
+
+
+def _epoch(iso: str | None) -> float | None:
+    if not iso:
+        return None
+    try:
+        from datetime import datetime
+
+        return datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+class _AuxPlaylist:
+    """Incrementally-read id set of one system playlist (UUSH / UUMO)."""
+
+    def __init__(self, playlist_id: str) -> None:
+        self.playlist_id = playlist_id
+        self.ids: set[str] = set()
+        self.next_token: str | None = None
+        self.started = False
+        self.exhausted = False
+        self.failed = False  # read error other than 404 -> caller falls back
+        self.oldest: float | None = None
+
+    def covers(self, cutoff: float | None) -> bool:
+        if self.exhausted or self.failed:
+            return True
+        if not self.started or cutoff is None or self.oldest is None:
+            return False
+        return self.oldest < cutoff - _AUX_MARGIN_SECONDS
+
+    async def ensure(self, client: httpx.AsyncClient, cutoff: float | None) -> None:
+        """Read pages until entries older than `cutoff` (minus margin) are seen.
+
+        `cutoff=None` means "read everything" (bounded by the per-call cap).
+        """
+        pages = 0
+        while not self.covers(cutoff) and pages < _AUX_MAX_PAGES_PER_CALL:
+            params = {
+                "part": "contentDetails",
+                "playlistId": self.playlist_id,
+                "maxResults": MAX_RESULTS,
+            }
+            if self.next_token:
+                params["pageToken"] = self.next_token
+            try:
+                data = await _get(client, "playlistItems", params)
+            except YouTubeApiError as exc:
+                if exc.status_code == 404:
+                    self.exhausted = True  # channel has no such playlist
+                else:
+                    self.failed = True
+                return
+            self.started = True
+            pages += 1
+            for item in data.get("items", []):
+                cd = item.get("contentDetails", {})
+                vid = cd.get("videoId")
+                if vid:
+                    self.ids.add(vid)
+                ts = _epoch(cd.get("videoPublishedAt"))
+                if ts is not None and (self.oldest is None or ts < self.oldest):
+                    self.oldest = ts
+            self.next_token = data.get("nextPageToken")
+            if not self.next_token:
+                self.exhausted = True
+
+
+def _aux_for(channel_id: str, prefix: str) -> _AuxPlaylist:
+    key = (channel_id, prefix)
+    entry = _aux_cache.get(key)
+    if entry is not None and time.time() - entry[0] < CACHE_TTL_SECONDS:
+        return entry[1]
+    aux = _AuxPlaylist(_aux_playlist_id(channel_id, prefix))
+    _aux_cache[key] = (time.time(), aux)
+    return aux
+
 
 _ISO8601_DURATION_RE = re.compile(
     r"P(?:(?P<days>\d+)D)?T?(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?(?:(?P<seconds>\d+)S)?"
@@ -107,26 +208,35 @@ def _parse_iso8601_duration(value: str | None) -> int | None:
     return parts["days"] * 86400 + parts["hours"] * 3600 + parts["minutes"] * 60 + parts["seconds"]
 
 
-async def _filter_playable(client: httpx.AsyncClient, videos: list[dict]) -> list[dict]:
-    """Drop Shorts and members-only/private videos; attach duration + live status.
+async def _filter_playable(
+    client: httpx.AsyncClient,
+    videos: list[dict],
+    shorts_ids: set[str] | None = None,
+    members_ids: set[str] | None = None,
+) -> list[dict]:
+    """Drop Shorts and private/deleted videos; attach duration, live status, members flag.
 
     A batched `videos.list` (1 quota unit) returns `contentDetails.duration` and
     `snippet.liveBroadcastContent` for every accessible video. Videos missing
-    from the response are members-only, private, or deleted (an unauthenticated
-    key can't see them) and are dropped; videos at/under the Shorts length
-    threshold are dropped too.
+    from the response are private or deleted and are dropped.
+
+    Shorts: `shorts_ids` (from the channel's UUSH playlist) is authoritative.
+    When it is None (playlist unreadable) fall back to a length threshold.
+
+    Members-only videos (`members_ids`, from UUMO) are kept but flagged
+    `members_only` so the client can collapse them.
 
     A zero duration is *not* a Short: live streams, upcoming videos, and
     premieres report `P0D`. Those stay in the payload (with `duration` and
-    `live_broadcast` set) so the client can collapse them instead of silently
-    dropping a video the user just failed to download.
+    `live_broadcast` set) so the client can collapse them.
     """
+    if shorts_ids is not None:
+        videos = [v for v in videos if v.get("video_id") not in shorts_ids]
     ids = [v["video_id"] for v in videos if v.get("video_id")]
     if not ids:
         return videos
 
     extras: dict[str, dict] = {}
-    # videos.list accepts up to 50 ids per call; channel lists are already ≤50.
     for start in range(0, len(ids), 50):
         chunk = ids[start : start + 50]
         data = await _get(
@@ -143,41 +253,49 @@ async def _filter_playable(client: httpx.AsyncClient, videos: list[dict]) -> lis
                 or "none",
             }
 
+    members_ids = members_ids or set()
     result: list[dict] = []
     for v in videos:
         vid = v.get("video_id")
         if vid not in extras:
-            continue  # members-only / private / deleted -> not accessible
+            continue  # private / deleted -> not accessible
         info = extras[vid]
         secs = info["duration"]
-        if secs is not None and 0 < secs <= _SHORTS_MAX_SECONDS:
-            continue  # Short (a 0 here means live/upcoming, not a Short)
-        result.append({**v, "duration": secs, "live_broadcast": info["live_broadcast"]})
+        if shorts_ids is None and secs is not None and 0 < secs <= _SHORTS_MAX_SECONDS:
+            continue  # fallback Short heuristic (0 = live/upcoming, not a Short)
+        result.append(
+            {
+                **v,
+                "duration": secs,
+                "live_broadcast": info["live_broadcast"],
+                "members_only": vid in members_ids,
+            }
+        )
     return result
 
 
-async def fetch_latest_videos(channel_id: str) -> list[dict]:
-    """Fetch up to MAX_RESULTS latest videos for a channel, using the cache.
+async def fetch_channel_page(channel_id: str, page_token: str | None = None) -> dict:
+    """Fetch one page (up to MAX_RESULTS uploads, before filtering) of a channel.
 
-    Returns a list of dicts: video_id, title, published_at, thumbnail_url,
-    channel_name, duration, live_broadcast. Raises YouTubeApiError on
+    Returns `{"videos": [...], "next_page_token": str | None}`. Each video is a
+    dict: video_id, title, published_at, thumbnail_url, channel_name, duration,
+    live_broadcast, members_only. Shorts are dropped. Raises YouTubeApiError on
     misconfiguration or API failure.
     """
-    cached = get_cached(channel_id)
+    cached = get_cached(channel_id, page_token)
     if cached is not None:
         return cached
 
     async with httpx.AsyncClient(timeout=15.0) as client:
         uploads_id = await _uploads_playlist_id(client, channel_id)
-        data = await _get(
-            client,
-            "playlistItems",
-            {
-                "part": "snippet",
-                "playlistId": uploads_id,
-                "maxResults": MAX_RESULTS,
-            },
-        )
+        params = {
+            "part": "snippet",
+            "playlistId": uploads_id,
+            "maxResults": MAX_RESULTS,
+        }
+        if page_token:
+            params["pageToken"] = page_token
+        data = await _get(client, "playlistItems", params)
 
         videos: list[dict] = []
         for item in data.get("items", []):
@@ -196,11 +314,26 @@ async def fetch_latest_videos(channel_id: str) -> list[dict]:
                 }
             )
 
-        # Drop Shorts and members-only/private videos.
-        videos = await _filter_playable(client, videos)
+        # Oldest upload on this page: the system playlists must be read at
+        # least that far back to classify every video here.
+        stamps = [t for t in (_epoch(v["published_at"]) for v in videos) if t]
+        cutoff = min(stamps) if stamps else None
 
-    _channel_cache[channel_id] = (time.time(), videos)
-    return videos
+        shorts = _aux_for(channel_id, SHORTS_PREFIX)
+        members = _aux_for(channel_id, MEMBERS_PREFIX)
+        await shorts.ensure(client, cutoff)
+        await members.ensure(client, cutoff)
+
+        videos = await _filter_playable(
+            client,
+            videos,
+            shorts_ids=None if shorts.failed else shorts.ids,
+            members_ids=members.ids,
+        )
+
+    page = {"videos": videos, "next_page_token": data.get("nextPageToken")}
+    _page_cache[(channel_id, page_token or "")] = (time.time(), page)
+    return page
 
 
 # ---------------------------------------------------------------------------

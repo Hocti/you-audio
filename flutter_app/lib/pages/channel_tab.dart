@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:cached_network_image/cached_network_image.dart';
 import '../models/channel_video.dart';
 import '../models/video.dart';
 import '../services/api_service.dart';
@@ -9,9 +8,11 @@ import '../services/back_interceptor.dart';
 import '../services/bookmark_service.dart';
 import '../services/download_manager.dart';
 import '../services/local_library.dart';
+import '../services/playback_progress.dart';
 import '../services/stream_manager.dart';
 import '../widgets/scrolling_text.dart';
 import '../widgets/video_actions.dart';
+import '../widgets/video_thumbnail.dart';
 
 /// Tab 2 — browse a YouTube channel's latest videos.
 ///
@@ -363,6 +364,16 @@ class _ChannelDetailViewState extends State<_ChannelDetailView> {
   bool _bookmarked = false;
   String? _channelName; // resolved from results
 
+  // Paging: the next page loads when the list is scrolled near the bottom.
+  String? _nextPageToken; // null = no more pages
+  bool _loadingMore = false;
+  String? _loadMoreError;
+  final ScrollController _scroll = ScrollController();
+  static const double _loadMoreTriggerPx = 600;
+
+  // Members-only / live / upcoming rows are hidden unless toggled on.
+  bool _showHidden = false;
+
   // Title search within the channel's videos.
   bool _searching = false;
   String _searchQuery = '';
@@ -381,6 +392,7 @@ class _ChannelDetailViewState extends State<_ChannelDetailView> {
   void dispose() {
     widget.backInterceptor.unregister(_handleBack);
     _searchController.dispose();
+    _scroll.dispose();
     super.dispose();
   }
 
@@ -417,20 +429,77 @@ class _ChannelDetailViewState extends State<_ChannelDetailView> {
   }
 
   Future<void> _load() async {
-    setState(() { _loading = true; _error = null; });
+    setState(() {
+      _loading = true;
+      _error = null;
+      _loadMoreError = null;
+    });
     try {
       await LocalLibrary.ensureInitialized();
-      final videos = await widget.api.getChannelVideos(widget.channelId);
+      final page = await widget.api.getChannelVideos(widget.channelId);
       if (mounted) {
         setState(() {
-          _videos = videos;
-          _channelName ??= videos.isNotEmpty ? videos.first.channelName : null;
+          _videos = page.videos;
+          _nextPageToken = page.nextPageToken;
+          _channelName ??=
+              page.videos.isNotEmpty ? page.videos.first.channelName : null;
           _loading = false;
         });
+        _maybeLoadMoreAfterLayout();
       }
     } catch (e) {
       if (mounted) setState(() { _error = e.toString(); _loading = false; });
     }
+  }
+
+  Future<void> _loadMore() async {
+    final token = _nextPageToken;
+    if (token == null || _loadingMore || _loading) return;
+    setState(() {
+      _loadingMore = true;
+      _loadMoreError = null;
+    });
+    try {
+      final page = await widget.api
+          .getChannelVideos(widget.channelId, pageToken: token);
+      if (!mounted) return;
+      final seen = _videos.map((v) => v.videoId).toSet();
+      setState(() {
+        _videos = [
+          ..._videos,
+          ...page.videos.where((v) => seen.add(v.videoId)),
+        ];
+        _nextPageToken = page.nextPageToken;
+        _loadingMore = false;
+      });
+      _maybeLoadMoreAfterLayout();
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _loadingMore = false;
+          _loadMoreError = e.toString();
+        });
+      }
+    }
+  }
+
+  /// A page can be mostly hidden rows (Shorts are dropped server-side;
+  /// members/live are collapsed here), leaving a list too short to scroll —
+  /// and so nothing to trigger the next page. Check once laid out.
+  void _maybeLoadMoreAfterLayout() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scroll.hasClients || _loadMoreError != null) return;
+      if (_scroll.position.extentAfter < _loadMoreTriggerPx) _loadMore();
+    });
+  }
+
+  bool _onScroll(ScrollNotification n) {
+    if (n.metrics.axis == Axis.vertical &&
+        n.metrics.extentAfter < _loadMoreTriggerPx &&
+        _loadMoreError == null) {
+      _loadMore();
+    }
+    return false;
   }
 
   String get _displayName =>
@@ -629,6 +698,18 @@ class _ChannelDetailViewState extends State<_ChannelDetailView> {
           ),
           if (!_searching)
             IconButton(
+              icon: Icon(
+                  _showHidden ? Icons.visibility : Icons.visibility_off_outlined),
+              tooltip: _showHidden
+                  ? 'Hide members-only / live / upcoming'
+                  : 'Show members-only / live / upcoming',
+              onPressed: () {
+                setState(() => _showHidden = !_showHidden);
+                _maybeLoadMoreAfterLayout();
+              },
+            ),
+          if (!_searching)
+            IconButton(
               icon: Icon(_bookmarked ? Icons.star : Icons.star_border,
                   color: _bookmarked ? Colors.amber : null),
               onPressed: _toggleBookmark,
@@ -671,67 +752,128 @@ class _ChannelDetailViewState extends State<_ChannelDetailView> {
       );
     }
 
-    if (_videos.isEmpty) {
+    if (_videos.isEmpty && _nextPageToken == null) {
       return const Center(child: Text('No videos found for this channel'));
     }
 
     final matched = _displayVideos;
-    if (matched.isEmpty) {
-      return const Center(child: Text('No videos match your search'));
-    }
-
-    final visible = matched.where((v) => !v.isCollapsed).toList();
-    final collapsed = matched.where((v) => v.isCollapsed).toList();
+    final hiddenCount = matched.where((v) => v.isCollapsed).length;
+    final rows = _showHidden
+        ? matched
+        : matched.where((v) => !v.isCollapsed).toList();
 
     // Rebuild as downloads progress/complete so row state/icons stay current.
     return ValueListenableBuilder<List<DownloadJob>>(
       valueListenable: DownloadManager.instance.jobs,
-      builder: (context, jobs, _) => ListView(
-        padding: const EdgeInsets.only(bottom: 8),
+      builder: (context, jobs, _) => NotificationListener<ScrollNotification>(
+        onNotification: _onScroll,
+        child: ListView.builder(
+          controller: _scroll,
+          // Keeps the list scrollable even when one page is mostly hidden.
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.only(bottom: 8),
+          itemCount: rows.length + 2,
+          itemBuilder: (context, i) {
+            if (i == 0) return _buildHiddenBanner(hiddenCount);
+            if (i == rows.length + 1) return _buildFooter(rows.isEmpty);
+            return _buildVideoTile(rows[i - 1], jobs);
+          },
+        ),
+      ),
+    );
+  }
+
+  /// One-line note above the list: how many loaded videos are hidden, with a
+  /// toggle (same as the AppBar eye icon).
+  Widget _buildHiddenBanner(int hiddenCount) {
+    if (hiddenCount == 0) return const SizedBox.shrink();
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 8, 0),
+      child: Row(
         children: [
-          for (final video in visible) _buildVideoTile(video, jobs),
-          if (collapsed.isNotEmpty)
-            ExpansionTile(
-              initiallyExpanded: false,
-              title: Text(
-                'Hidden: live / upcoming / members (${collapsed.length})',
-                style: Theme.of(context).textTheme.titleSmall,
-              ),
-              subtitle: Text(
-                'Members-only, trailers, unreleased, and live videos',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
-              ),
-              children: [
-                for (final video in collapsed) _buildVideoTile(video, jobs),
-              ],
+          Icon(Icons.visibility_off_outlined,
+              size: 16, color: scheme.onSurfaceVariant),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              _showHidden
+                  ? 'Showing $hiddenCount members-only / live / upcoming'
+                  : '$hiddenCount hidden: members-only / live / upcoming',
+              style: Theme.of(context)
+                  .textTheme
+                  .bodySmall
+                  ?.copyWith(color: scheme.onSurfaceVariant),
             ),
+          ),
+          TextButton(
+            onPressed: () {
+              setState(() => _showHidden = !_showHidden);
+              _maybeLoadMoreAfterLayout();
+            },
+            child: Text(_showHidden ? 'Hide' : 'Show'),
+          ),
         ],
       ),
     );
+  }
+
+  Widget _buildFooter(bool nothingShown) {
+    if (_loadingMore) {
+      return const Padding(
+        padding: EdgeInsets.all(16),
+        child: Center(
+          child: SizedBox(
+            width: 24, height: 24,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        ),
+      );
+    }
+    if (_loadMoreError != null) {
+      return Padding(
+        padding: const EdgeInsets.all(8),
+        child: Center(
+          child: TextButton.icon(
+            onPressed: () {
+              setState(() => _loadMoreError = null);
+              _loadMore();
+            },
+            icon: const Icon(Icons.refresh),
+            label: const Text("Couldn't load more — retry"),
+          ),
+        ),
+      );
+    }
+    if (_nextPageToken == null && nothingShown) {
+      return Padding(
+        padding: const EdgeInsets.all(32),
+        child: Center(
+          child: Text(_searchQuery.trim().isNotEmpty
+              ? 'No videos match your search'
+              : 'No videos to show'),
+        ),
+      );
+    }
+    return const SizedBox(height: 8);
   }
 
   Widget _buildVideoTile(ChannelVideo video, List<DownloadJob> jobs) {
     final state = _stateFor(video.videoId, jobs);
     final job = _jobFor(video.videoId, jobs);
     final durationSecs = _durationSeconds(video);
-    final durationText =
-        (durationSecs != null && durationSecs > 0)
-            ? formatDurationSeconds(durationSecs)
-            : null;
     final date = _formatDate(video.publishedAt);
     final subtitle = state == _RowState.error && job != null
         ? 'Download failed — tap to retry'
         : [
             if (date.isNotEmpty) date,
-            if (durationText != null) durationText,
+            if (video.membersOnly || video.looksMembersOnly) 'Members only',
           ].join('  ·  ');
     return ListTile(
       contentPadding:
           const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      minLeadingWidth: 80,
-      leading: _thumbnail(video, durationText),
+      minLeadingWidth: VideoThumbnail.width,
+      leading: _thumbnail(video, durationSecs),
       title: ScrollingText(video.title),
       subtitle: Text(
         subtitle,
@@ -755,68 +897,22 @@ class _ChannelDetailViewState extends State<_ChannelDetailView> {
     return video.duration;
   }
 
-  Widget _thumbnail(ChannelVideo video, String? durationText) {
-    final badgeText = video.liveBroadcast == 'live'
+  Widget _thumbnail(ChannelVideo video, int? durationSecs) {
+    final durationText = (durationSecs != null && durationSecs > 0)
+        ? formatDurationSeconds(durationSecs)
+        : null;
+    final badge = video.liveBroadcast == 'live'
         ? 'LIVE'
         : video.liveBroadcast == 'upcoming' || video.duration == 0
             ? (durationText ?? 'SOON')
             : durationText;
-    final image = video.thumbnailUrl == null
-        ? ColoredBox(
-            color: Theme.of(context).colorScheme.surfaceContainerHighest,
-            child: const Center(child: Icon(Icons.music_note, size: 24)),
-          )
-        : CachedNetworkImage(
-            imageUrl: video.thumbnailUrl!,
-            width: 80,
-            height: 56,
-            fit: BoxFit.cover,
-            placeholder: (_, __) => ColoredBox(
-              color: Theme.of(context).colorScheme.surfaceContainerHighest,
-              child: const Center(child: Icon(Icons.music_note, size: 24)),
-            ),
-            errorWidget: (_, __, ___) => ColoredBox(
-              color: Theme.of(context).colorScheme.surfaceContainerHighest,
-              child: const Center(child: Icon(Icons.music_note, size: 24)),
-            ),
-          );
-    return SizedBox(
-      width: 80,
-      height: 56,
-      child: Stack(
-        children: [
-          Positioned.fill(
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: image,
-            ),
-          ),
-          if (badgeText != null)
-            Positioned(
-              right: 4,
-              bottom: 4,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                decoration: BoxDecoration(
-                  color: video.liveBroadcast == 'live'
-                      ? Colors.red.shade700
-                      : Colors.black87,
-                  borderRadius: BorderRadius.circular(3),
-                ),
-                child: Text(
-                  badgeText,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    height: 1.15,
-                    letterSpacing: 0.2,
-                  ),
-                ),
-              ),
-            ),
-        ],
-      ),
+    final onDevice = LocalLibrary.contains(video.videoId);
+    return VideoThumbnail(
+      filePath: onDevice ? LocalLibrary.thumbPath(video.videoId) : null,
+      networkUrl: video.thumbnailUrl,
+      badge: badge,
+      badgeColor: video.liveBroadcast == 'live' ? Colors.red.shade700 : null,
+      progress: PlaybackProgress.fraction(video.videoId, durationSecs),
     );
   }
 
@@ -826,56 +922,61 @@ class _ChannelDetailViewState extends State<_ChannelDetailView> {
         state == _RowState.playing;
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (!alreadyHere)
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (!alreadyHere)
+                ListTile(
+                  leading: const Icon(Icons.download_outlined),
+                  title: const Text('Download audio'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _onTapVideo(video, _RowState.none);
+                  },
+                ),
+              // Streaming is opt-in from this menu only — tapping a row still
+              // downloads, which stays the default everywhere.
+              if (!alreadyHere)
+                ListTile(
+                  leading: const Icon(Icons.play_circle_outline),
+                  title: const Text('Stream audio'),
+                  subtitle: const Text('Play as soon as it is ready'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _stream(video);
+                  },
+                ),
+              ...copyIdMenuTiles(context, ctx,
+                  youtubeId: video.videoId, channelId: widget.channelId),
               ListTile(
-                leading: const Icon(Icons.download_outlined),
-                title: const Text('Download audio'),
+                leading: const Icon(Icons.content_copy),
+                title: const Text('Copy YouTube link'),
                 onTap: () {
                   Navigator.pop(ctx);
-                  _onTapVideo(video, _RowState.none);
+                  copyYoutubeLink(context, video.videoId);
                 },
               ),
-            // Streaming is opt-in from this menu only — tapping a row still
-            // downloads, which stays the default everywhere.
-            if (!alreadyHere)
               ListTile(
-                leading: const Icon(Icons.play_circle_outline),
-                title: const Text('Stream audio'),
-                subtitle: const Text('Play as soon as it is ready'),
+                leading: const Icon(Icons.open_in_new),
+                title: const Text('Open in YouTube'),
                 onTap: () {
                   Navigator.pop(ctx);
-                  _stream(video);
+                  openInYouTube(context, video.videoId);
                 },
               ),
-            ListTile(
-              leading: const Icon(Icons.content_copy),
-              title: const Text('Copy YouTube link'),
-              onTap: () {
-                Navigator.pop(ctx);
-                copyYoutubeLink(context, video.videoId);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.open_in_new),
-              title: const Text('Open in YouTube'),
-              onTap: () {
-                Navigator.pop(ctx);
-                openInYouTube(context, video.videoId);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.info_outline),
-              title: const Text('Detail'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _showDetail(video);
-              },
-            ),
-          ],
+              ListTile(
+                leading: const Icon(Icons.info_outline),
+                title: const Text('Detail'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _showDetail(video);
+                },
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -887,7 +988,9 @@ class _ChannelDetailViewState extends State<_ChannelDetailView> {
       title: video.title,
       rows: [
         ('Channel', video.channelName),
+        ('Channel ID', widget.channelId),
         ('Video ID', video.videoId),
+        if (video.membersOnly) ('Access', 'Members only'),
         if (video.publishedAt != null)
           ('Published', _formatDate(video.publishedAt)),
         if (video.duration != null && video.duration! > 0)

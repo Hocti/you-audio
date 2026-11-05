@@ -75,12 +75,14 @@ class ChannelVideoOut(BaseModel):
     channel_name: str | None = None
     duration: int | None = None  # seconds; 0 = live / upcoming / premiere
     live_broadcast: str | None = None  # none | upcoming | live
+    members_only: bool = False  # in the channel's members-only (UUMO) playlist
 
 
 class ChannelVideosResponse(BaseModel):
     channel_id: str
     cached: bool
     total: int
+    next_page_token: str | None = None  # pass back as ?page_token= for more
     videos: list[ChannelVideoOut]
 
 

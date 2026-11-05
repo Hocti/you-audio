@@ -3,6 +3,7 @@ import 'pages/server_setup_page.dart';
 import 'services/audio_service.dart';
 import 'services/download_manager.dart';
 import 'services/local_library.dart';
+import 'services/playback_progress.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -10,6 +11,7 @@ Future<void> main() async {
   // audio_service pattern) rather than inside a navigated widget.
   try {
     await LocalLibrary.ensureInitialized();
+    await PlaybackProgress.init();
     // Failed downloads from the last run, so they stay visible and retryable
     // instead of disappearing when Android kills the process.
     await DownloadManager.instance.restoreFailed();

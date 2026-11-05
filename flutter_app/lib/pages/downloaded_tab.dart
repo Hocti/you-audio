@@ -1,14 +1,14 @@
 import 'dart:io';
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../models/local_video.dart';
 import '../services/api_service.dart';
 import '../services/audio_service.dart';
 import '../services/local_library.dart';
 import '../services/download_manager.dart';
+import '../services/playback_progress.dart';
 import '../widgets/scrolling_text.dart';
 import '../widgets/video_actions.dart';
+import '../widgets/video_thumbnail.dart';
 
 enum SortMode { downloadTime, channel, listenStatus }
 enum FilterMode { all, unlistened, listened }
@@ -87,17 +87,14 @@ class _DownloadedTabState extends State<DownloadedTab> {
     if (showSpinner && mounted) setState(() => _loading = true);
     await LocalLibrary.ensureInitialized();
     final videos = LocalLibrary.all();
-    final prefs = await SharedPreferences.getInstance();
+    await PlaybackProgress.init();
     final progressMap = <String, int>{};
     final completedMap = <String, bool>{};
     for (final v in videos) {
-      final current = prefs.getInt('progress_${v.youtubeId}') ?? 0;
-      final maxP = prefs.getInt('max_progress_${v.youtubeId}') ?? 0;
-      final completed = prefs.getBool('completed_${v.youtubeId}') ?? false;
+      final completed = PlaybackProgress.isCompleted(v.youtubeId);
       completedMap[v.youtubeId] = completed;
       // Display the furthest the user has ever reached, not the resume point.
-      var shown = maxP > current ? maxP : current;
-      if (completed && v.duration > shown) shown = v.duration;
+      final shown = PlaybackProgress.furthestSeconds(v.youtubeId, v.duration);
       if (shown > 0 || completed) {
         progressMap[v.youtubeId] = shown;
       }
@@ -195,64 +192,69 @@ class _DownloadedTabState extends State<DownloadedTab> {
   void _showContextMenu(BuildContext ctx, LocalVideo video) {
     showModalBottomSheet(
       context: ctx,
-      builder: (_) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.queue_music),
-              title: const Text('Add to Queue'),
-              onTap: () {
-                Navigator.pop(ctx);
-                if (AudioManager.isInitialized) {
-                  AudioManager.handler.addToQueue(video.toVideo());
-                }
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('"${video.title}" added to queue')),
-                );
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.content_copy),
-              title: const Text('Copy YouTube link'),
-              onTap: () {
-                Navigator.pop(ctx);
-                copyYoutubeLink(context, video.youtubeId);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.open_in_new),
-              title: const Text('Open in YouTube'),
-              onTap: () {
-                Navigator.pop(ctx);
-                openInYouTube(context, video.youtubeId);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.subscriptions_outlined),
-              title: const Text('Open channel'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _openChannel(video);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.info_outline),
-              title: const Text('Detail'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _showDetail(video);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.delete_outline),
-              title: const Text('Delete from device'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _deleteVideo(video);
-              },
-            ),
-          ],
+      isScrollControlled: true,
+      builder: (sheetCtx) => SafeArea(
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.queue_music),
+                title: const Text('Add to Queue'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  if (AudioManager.isInitialized) {
+                    AudioManager.handler.addToQueue(video.toVideo());
+                  }
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('"${video.title}" added to queue')),
+                  );
+                },
+              ),
+              ...copyIdMenuTiles(context, ctx,
+                  youtubeId: video.youtubeId, channelId: video.channelId),
+              ListTile(
+                leading: const Icon(Icons.content_copy),
+                title: const Text('Copy YouTube link'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  copyYoutubeLink(context, video.youtubeId);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.open_in_new),
+                title: const Text('Open in YouTube'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  openInYouTube(context, video.youtubeId);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.subscriptions_outlined),
+                title: const Text('Open channel'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _openChannel(video);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.info_outline),
+                title: const Text('Detail'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _showDetail(video);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.delete_outline),
+                title: const Text('Delete from device'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _deleteVideo(video);
+                },
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -482,6 +484,18 @@ class _DownloadedTabState extends State<DownloadedTab> {
           style: Theme.of(context).textTheme.bodySmall?.copyWith(
                 color: isError ? Theme.of(context).colorScheme.error : null,
               )),
+      onLongPress: job.youtubeId.isEmpty
+          ? null
+          : () => showModalBottomSheet(
+                context: context,
+                builder: (ctx) => SafeArea(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: copyIdMenuTiles(context, ctx,
+                        youtubeId: job.youtubeId),
+                  ),
+                ),
+              ),
       trailing: isError
           ? Row(
               mainAxisSize: MainAxisSize.min,
@@ -510,38 +524,14 @@ class _DownloadedTabState extends State<DownloadedTab> {
 
   Widget _jobLeading(DownloadJob job) {
     final isError = job.stage == DownloadStage.error;
-    final thumb = job.youtubeId.isEmpty
-        ? null
-        : File(LocalLibrary.thumbPath(job.youtubeId));
-    final networkUrl = job.thumbnailUrl ??
-        (job.youtubeId.isNotEmpty ? youtubeThumbnailUrl(job.youtubeId) : null);
-
-    Widget child;
-    if (thumb != null && thumb.existsSync()) {
-      child = Image.file(thumb, fit: BoxFit.cover);
-    } else if (networkUrl != null) {
-      child = CachedNetworkImage(
-        imageUrl: networkUrl,
-        fit: BoxFit.cover,
-        placeholder: (_, __) => _jobPlaceholder(isError),
-        errorWidget: (_, __, ___) => _jobPlaceholder(isError),
-      );
-    } else {
-      child = _jobPlaceholder(isError);
-    }
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(8),
-      child: SizedBox(width: 80, height: 56, child: child),
-    );
-  }
-
-  Widget _jobPlaceholder(bool isError) {
-    return Container(
-      color: Theme.of(context).colorScheme.surfaceContainerHighest,
-      child: Icon(isError ? Icons.error_outline : Icons.downloading,
-          color: isError
-              ? Theme.of(context).colorScheme.error
-              : Colors.amber),
+    final hasId = job.youtubeId.isNotEmpty;
+    return VideoThumbnail(
+      filePath: hasId ? LocalLibrary.thumbPath(job.youtubeId) : null,
+      networkUrl: job.thumbnailUrl ??
+          (hasId ? youtubeThumbnailUrl(job.youtubeId) : null),
+      placeholderIcon: isError ? Icons.error_outline : Icons.downloading,
+      placeholderColor:
+          isError ? Theme.of(context).colorScheme.error : Colors.amber,
     );
   }
 
@@ -562,7 +552,6 @@ class _DownloadedTabState extends State<DownloadedTab> {
     final progress = _progressMap[video.youtubeId];
     final isPlaying = AudioManager.isInitialized &&
         AudioManager.handler.currentVideo?.youtubeId == video.youtubeId;
-    final thumb = File(LocalLibrary.thumbPath(video.youtubeId));
 
     // Swipe-left-to-delete. The "Delete" label appears only once the drag passes
     // a ~100px threshold; releasing past it deletes, releasing before it cancels.
@@ -573,17 +562,11 @@ class _DownloadedTabState extends State<DownloadedTab> {
 
     final tile = ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      leading: ClipRRect(
-        borderRadius: BorderRadius.circular(8),
-        child: SizedBox(
-          width: 80, height: 56,
-          child: thumb.existsSync()
-              ? Image.file(thumb, fit: BoxFit.cover)
-              : Container(
-                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                  child: const Icon(Icons.music_note, size: 24),
-                ),
-        ),
+      minLeadingWidth: VideoThumbnail.width,
+      leading: VideoThumbnail(
+        filePath: LocalLibrary.thumbPath(video.youtubeId),
+        badge: video.duration > 0 ? video.toVideo().durationFormatted : null,
+        progress: PlaybackProgress.fraction(video.youtubeId, video.duration),
       ),
       title: ScrollingText(video.title,
           style: TextStyle(
@@ -599,22 +582,18 @@ class _DownloadedTabState extends State<DownloadedTab> {
           const SizedBox(height: 2),
           Row(
             children: [
-              Text(video.toVideo().durationFormatted,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant)),
               if (video.hasSubtitle) ...[
-                const SizedBox(width: 8),
                 Icon(Icons.closed_caption_outlined,
                     size: 14,
                     color: Theme.of(context).colorScheme.onSurfaceVariant),
+                const SizedBox(width: 8),
               ],
               if (_completedMap[video.youtubeId] ?? false) ...[
-                const SizedBox(width: 8),
                 Icon(Icons.check_circle_outline,
                     size: 14, color: Colors.green.shade400),
+                const SizedBox(width: 8),
               ],
               if (progress != null) ...[
-                const SizedBox(width: 8),
                 Text(
                     _formatProgress(
                       progress,
