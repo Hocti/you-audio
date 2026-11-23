@@ -9,7 +9,13 @@ import 'video.dart';
 class ChannelPage {
   final List<ChannelVideo> videos;
   final String? nextPageToken;
-  const ChannelPage(this.videos, this.nextPageToken);
+
+  /// The server sent videos without `duration` / `members_only`: it predates
+  /// those fields, so lengths can't be shown and members-only videos can only
+  /// be caught by the title heuristic. Fixed by redeploying the backend.
+  final bool serverOutdated;
+  const ChannelPage(this.videos, this.nextPageToken,
+      {this.serverOutdated = false});
 }
 
 class ChannelVideo {
@@ -73,16 +79,20 @@ class ChannelVideo {
     return dt.isAfter(DateTime.now());
   }
 
+  /// Lower-cased title fragments that mark a members-only upload (zh / ja / en).
+  static const _membersTitleMarkers = [
+    '會員獨家', '會員限定', '會員專屬', '會員專用', '[會員]', '【會員】', '會限',
+    '会员限定', '会员专属',
+    'メン限', 'メンげん', 'メンゲン', 'メンバー限定', 'メンバーシップ限定',
+    'メンバー様限定', 'メンシ限定',
+    'members only', 'members-only', 'member-only', 'member only',
+    'membership only',
+  ];
+
   /// Title heuristic, a fallback for the server's [membersOnly] flag.
   bool get looksMembersOnly {
     final t = title.toLowerCase();
-    return t.contains('會員獨家') ||
-        t.contains('會員限定') ||
-        t.contains('會員專屬') ||
-        t.contains('[會員]') ||
-        t.contains('members only') ||
-        t.contains('members-only') ||
-        t.contains('member-only');
+    return _membersTitleMarkers.any(t.contains);
   }
 
   String? get durationLabel {

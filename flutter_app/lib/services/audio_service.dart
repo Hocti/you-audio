@@ -6,6 +6,7 @@ import 'package:just_audio/just_audio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/video.dart';
 import 'local_library.dart';
+import 'playback_progress.dart';
 
 class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
   final AudioPlayer _player = AudioPlayer();
@@ -423,6 +424,139 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
     await _player.seek(newPos > Duration.zero ? newPos : Duration.zero);
   }
 
+  // ---------------------------------------------------------------------------
+  // Android Auto / media browser
+  // ---------------------------------------------------------------------------
+  //
+  // Android Auto talks to the AudioService MediaBrowserService, which forwards
+  // to these overrides. The tree is built from the **local library** only, so
+  // it works offline in the car. Browsable folders sit under the root; every
+  // leaf's mediaId is the bare youtubeId, so getMediaItem/playFromMediaId don't
+  // need to know which folder it came from.
+
+  static const _folderContinue = 'folder:continue';
+  static const _folderUnlistened = 'folder:unlistened';
+  static const _folderAll = 'folder:all';
+
+  /// Thumbnail URI Android Auto can open: served by ThumbnailProvider.kt,
+  /// because the car can't read our private `file://` paths.
+  static Uri? _carArtUri(String id) {
+    if (!File(LocalLibrary.thumbPath(id)).existsSync()) return null;
+    return Uri.parse('content://net.teashop.you_audio.thumbs/$id.jpg');
+  }
+
+  MediaItem _browseItem(Video v) => MediaItem(
+        id: v.youtubeId,
+        title: v.title,
+        artist: v.channel,
+        duration: v.duration > 0 ? Duration(seconds: v.duration) : null,
+        artUri: _carArtUri(v.youtubeId),
+        playable: true,
+      );
+
+  bool _started(String id) =>
+      PlaybackProgress.furthestSeconds(id, 0) > 0 && !PlaybackProgress.isCompleted(id);
+
+  Future<List<Video>> _libraryVideos() async {
+    await LocalLibrary.ensureInitialized();
+    await PlaybackProgress.init();
+    return LocalLibrary.all()
+        .where((lv) => File(LocalLibrary.audioPath(lv.youtubeId)).existsSync())
+        .map((lv) => lv.toVideo())
+        .toList();
+  }
+
+  Future<List<Video>> _folderVideos(String folderId) async {
+    final all = await _libraryVideos();
+    switch (folderId) {
+      case _folderContinue:
+        return all.where((v) => _started(v.youtubeId)).toList();
+      case _folderUnlistened:
+        return all
+            .where((v) =>
+                !PlaybackProgress.isCompleted(v.youtubeId) && !_started(v.youtubeId))
+            .toList();
+      case _folderAll:
+        return all;
+    }
+    return const [];
+  }
+
+  @override
+  Future<List<MediaItem>> getChildren(String parentMediaId,
+      [Map<String, dynamic>? options]) async {
+    if (parentMediaId == AudioService.browsableRootId) {
+      return const [
+        MediaItem(id: _folderContinue, title: 'Continue', playable: false),
+        MediaItem(id: _folderUnlistened, title: 'Unlistened', playable: false),
+        MediaItem(id: _folderAll, title: 'All', playable: false),
+      ];
+    }
+    if (parentMediaId == AudioService.recentRootId) {
+      // "Recent" = what the car offers to resume (e.g. on connect).
+      final cur = _currentVideo;
+      if (cur != null) return [_browseItem(cur)];
+      final cont = await _folderVideos(_folderContinue);
+      return cont.take(1).map(_browseItem).toList();
+    }
+    final videos = await _folderVideos(parentMediaId);
+    return videos.map(_browseItem).toList();
+  }
+
+  @override
+  Future<MediaItem?> getMediaItem(String mediaId) async {
+    await LocalLibrary.ensureInitialized();
+    final lv = LocalLibrary.get(mediaId);
+    return lv == null ? null : _browseItem(lv.toVideo());
+  }
+
+  @override
+  Future<void> playFromMediaId(String mediaId,
+      [Map<String, dynamic>? extras]) async {
+    await LocalLibrary.ensureInitialized();
+    final lv = LocalLibrary.get(mediaId);
+    if (lv == null) return;
+    // Next/previous in the car walk the whole library, newest first, unless the
+    // app already set a playlist that contains this track.
+    if (!_playlist.any((v) => v.youtubeId == mediaId)) {
+      _playlist = await _libraryVideos();
+    }
+    await playVideo(lv.toVideo());
+  }
+
+  @override
+  Future<List<MediaItem>> search(String query,
+      [Map<String, dynamic>? extras]) async {
+    return (await _searchVideos(query)).map(_browseItem).toList();
+  }
+
+  /// Voice: "Play <query> on You Audio". Empty query = resume / something.
+  @override
+  Future<void> playFromSearch(String query,
+      [Map<String, dynamic>? extras]) async {
+    if (query.trim().isEmpty) {
+      if (_currentVideo == null) await restoreLastSession();
+      if (_currentVideo != null) return play();
+      final cont = await _folderVideos(_folderContinue);
+      final pick = cont.isNotEmpty ? cont : await _libraryVideos();
+      if (pick.isNotEmpty) await playFromMediaId(pick.first.youtubeId);
+      return;
+    }
+    final hits = await _searchVideos(query);
+    if (hits.isNotEmpty) await playFromMediaId(hits.first.youtubeId);
+  }
+
+  Future<List<Video>> _searchVideos(String query) async {
+    final q = query.trim().toLowerCase();
+    final all = await _libraryVideos();
+    if (q.isEmpty) return all;
+    return all
+        .where((v) =>
+            v.title.toLowerCase().contains(q) ||
+            v.channel.toLowerCase().contains(q))
+        .toList();
+  }
+
   PlaybackState _transformEvent(PlaybackEvent event) {
     return PlaybackState(
       controls: [
@@ -436,6 +570,9 @@ class AudioPlayerHandler extends BaseAudioHandler with SeekHandler {
         MediaAction.seek,
         MediaAction.seekForward,
         MediaAction.seekBackward,
+        // Android Auto: tapping a browse item / voice search.
+        MediaAction.playFromMediaId,
+        MediaAction.playFromSearch,
       },
       androidCompactActionIndices: const [0, 2, 4],
       processingState: const {
@@ -465,6 +602,13 @@ class AudioManager {
         androidNotificationChannelName: 'You Audio',
         androidNotificationOngoing: true,
         androidStopForegroundOnPause: true,
+        // Android Auto: show the browse folders as tabs, items as a list.
+        androidBrowsableRootExtras: {
+          'android.media.browse.CONTENT_STYLE_SUPPORTED': true,
+          'android.media.browse.CONTENT_STYLE_BROWSABLE_HINT': 1, // list
+          'android.media.browse.CONTENT_STYLE_PLAYABLE_HINT': 1, // list
+          'android.media.browse.SEARCH_SUPPORTED': true,
+        },
       ),
     );
     return _handler!;

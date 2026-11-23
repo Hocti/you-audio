@@ -132,6 +132,29 @@ Go to the Container Manager app in DSM.
 - Container Manager will detect the `docker-compose.yml` file automatically.
 - Click `Next` and follow the prompts.
 
+**Updating to a new version**
+
+Your downloads and database live in the `ytdata` / `pgdata` Docker volumes, so updating does not lose any data.
+
+1. **Upload the new files** — In File Station, upload the new `backend/` contents into `/volume1/docker/youtube-audio-backend/` and choose **Overwrite** when asked.
+   - If you edited `docker-compose.yml` (port, password, `ACCESS_TOKEN`), either skip overwriting it or re-apply your changes afterwards.
+2. **Stop the project** — Container Manager → `Project` → select the project → `Action` → `Stop`.
+3. **Rebuild** — With the project still selected, click `Action` → `Build`. This rebuilds the `backend` image from the new files and starts all containers again. Wait until the status shows **Running**.
+4. **(Optional) Update the PO Token provider** — Go to `Image`, select `brainicism/bgutil-ytdlp-pot-provider`. If it shows **Update available**, click `Update`, then `Project` → `Action` → `Restart`.
+5. **Verify** — Open `http://your-nas-ip:8000/api/health`.
+6. **(Optional) Clean up** — Old images are left behind as `<none>`. Go to `Image` → `Action` → `Remove unused images` to free disk space.
+
+> Do **not** use `Delete` on the project to update — if you tick the option to remove volumes, all downloads and the database are erased. `Stop` + `Build` is enough.
+
+SSH equivalent (Method 1 users):
+
+```bash
+cd /volume1/docker/youtube-audio-backend
+docker compose pull            # update pot-provider / postgres images
+docker compose up -d --build   # rebuild backend and restart
+docker image prune -f          # remove old images
+```
+
 ---
 
 ### Changing the Port on Synology

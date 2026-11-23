@@ -90,7 +90,7 @@ flutter_app/
   - **Paste view**: a "Paste Channel" button that reads the clipboard. A bare/embedded `UC…` id is used directly (`extractChannelId`); anything else (a `/channel/` URL, `@handle` URL, `/user/`, `/c/`) is resolved to a channel id via `ApiService.resolveChannel()` → `GET /api/channel/resolve`. Below the button is a scrollable list of bookmarked channels (`BookmarkService`, SharedPreferences).
     The paste header is part of the same scroll view as the bookmark list (one `ReorderableListView`), so on small screens the header scrolls away instead of permanently occupying the top half.
     Bookmarks can be **drag-reordered** via the handle on each row; a newly starred channel is inserted at the **top**. Long-press a bookmarked channel (or the channel name in the AppBar of the detail view) for `showChannelContextMenu`: **Copy channel ID** (the bare `UC…`, which is what the app's own channel input accepts) and **Open channel in YouTube**.
-  - **Detail view**: lists the channel's videos via `ApiService.getChannelVideos(channelId, pageToken:)` (Shorts dropped server-side). **Infinite scroll**: the next page (≈50) loads when the list is within 600px of the bottom; a post-frame check also loads more when a page is too short to scroll (e.g. mostly hidden rows). A load-more failure shows a retry row in the footer. Members-only (server `members_only` flag, or the title heuristic), live, and upcoming/unreleased videos are **hidden** by default; a banner at the top shows how many, and it and the AppBar eye icon toggle showing them. Back button + a star toggle (AppBar action) to bookmark the channel. A **search icon** filters the list by title. Video titles use `ScrollingText`. Long-press a video for a context menu: **Download audio**, **Stream audio** (see `StreamManager` — opt-in from this menu only; tapping a row still downloads), **Copy video ID**, **Copy channel ID**, **Copy YouTube link**, **Open in YouTube**, **Detail**.
+  - **Detail view**: lists the channel's videos via `ApiService.getChannelVideos(channelId, pageToken:)` (Shorts dropped server-side). **Infinite scroll**: the next page (≈50) loads when the list is within 600px of the bottom; a post-frame check also loads more when a page is too short to scroll (e.g. mostly hidden rows). A load-more failure shows a retry row in the footer. Members-only (server `members_only` flag, or the title heuristic), live, and upcoming/unreleased videos are **hidden** by default; a banner at the top shows how many, and it and the AppBar eye icon toggle showing them. If the server's videos lack `duration`/`members_only` keys (backend older than those fields) an **outdated-server banner** says to redeploy (`ChannelPage.serverOutdated`). Back button + a star toggle (AppBar action) to bookmark the channel. A **search icon** filters the list by title. Video titles use `ScrollingText`. Long-press a video for a context menu: **Download audio**, **Stream audio** (see `StreamManager` — opt-in from this menu only; tapping a row still downloads), **Copy video ID**, **Copy channel ID**, **Copy YouTube link**, **Open in YouTube**, **Detail**.
 - Tapping a video acts by per-row state (`_RowState`): **none** → start a download; **downloading** → "already downloading"; **downloaded** → play it; **playing** → jump to the Play tab. Trailing icon reflects the state (download / spinner / download_done / equalizer / error). The list rebuilds from `DownloadManager.instance.jobs` so icons update live.
 - Channel thumbnails are direct YouTube CDN URLs, so they need no access token.
 - Not yet implemented: YouTube OAuth login / subscribed-channel browsing.
@@ -142,6 +142,25 @@ flutter_app/
 - **`AudioManager`** — singleton that initializes `AudioPlayerHandler` via `AudioService.init()`.
   - Call `AudioManager.init()` once at app startup before using playback.
   - Access the handler via `AudioManager.handler`.
+
+### Android Auto
+- Declared via `res/xml/automotive_app_desc.xml` (`<uses name="media"/>`) +
+  the `com.google.android.gms.car.application` meta-data in the manifest. The
+  car connects to audio_service's `MediaBrowserService`, which forwards to the
+  handler's `getChildren` / `getMediaItem` / `playFromMediaId` / `search` /
+  `playFromSearch` overrides.
+- Browse tree is **local library only** (offline): root → **Continue**
+  (started, not completed) / **Unlistened** / **All**. Leaf mediaId = bare
+  youtubeId. `recentRootId` returns the current/last track for resume.
+- Playing from the car sets the playlist to the whole library (newest first)
+  unless the current playlist already contains the track, so next/prev work.
+- Browse-item art uses `content://net.teashop.you_audio.thumbs/<id>.jpg`, served
+  by `ThumbnailProvider.kt` (read-only, `<11-char id>.jpg` only): Android Auto
+  runs in another process and can't open our private `file://` paths.
+- `MediaAction.playFromMediaId` / `playFromSearch` must stay in
+  `systemActions`, or the car refuses to play browse items / voice requests.
+- Sideloaded (non-Play-Store) apps only appear in Android Auto after enabling
+  **Unknown sources** in Android Auto's developer settings.
 
 ### Media Notification
 - Configured in `AudioServiceConfig` inside `AudioManager.init()`.

@@ -18,8 +18,11 @@ services:
 
   # Fetches PO Tokens for yt-dlp's bgutil plugin (requirements.txt). YouTube
   # 403s most media URLs without one — see downloader.py's POT_PROVIDER_URL.
+  # The backend installs the plugin version matching this server's (it asks
+  # GET /ping), so pulling a newer image here is all an upgrade needs.
   pot-provider:
     image: brainicism/bgutil-ytdlp-pot-provider:latest
+    pull_policy: always
     restart: unless-stopped
 
   backend:
@@ -30,8 +33,9 @@ services:
     environment:
       DATABASE_URL: "postgresql+asyncpg://ytaudio:ytaudio@db:5432/ytaudio"
       DATA_DIR: "/data"
-      ACCESS_TOKEN: ""
+      ACCESS_TOKEN: "${ACCESS_TOKEN:-}"
       POT_PROVIDER_URL: "http://pot-provider:4416"
+      YOUTUBE_API_KEY: "${YOUTUBE_API_KEY:-}"
     volumes:
       - ytdata:/data
     depends_on:

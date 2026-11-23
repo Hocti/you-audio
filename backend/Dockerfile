@@ -5,10 +5,13 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends ffmpeg && \
     rm -rf /var/lib/apt/lists/*
 
-# Bun: JavaScript runtime yt-dlp uses to solve YouTube's JS challenges.
-# Copied as a single static binary from the official image (glibc build,
-# compatible with this Debian-based python:slim image).
-COPY --from=oven/bun:1 /usr/local/bin/bun /usr/local/bin/bun
+# Deno: JavaScript runtime yt-dlp uses (via yt-dlp-ejs) to solve YouTube's JS
+# challenges. Deno is yt-dlp's recommended runtime; bun is deprecated there
+# (yt-dlp#16766) and anything newer than bun 1.3.14 is unsupported — the old
+# `oven/bun:1` tag floated to 1.4.x and quietly broke the n-challenge solver.
+# The `bin` image holds just the glibc-linked binary, which this Debian-based
+# python:slim image can run.
+COPY --from=denoland/deno:bin /deno /usr/local/bin/deno
 
 WORKDIR /app
 

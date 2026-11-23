@@ -25,7 +25,8 @@ backend/
 │   ├── database.py       # SQLAlchemy async engine and session factory
 │   ├── models.py         # ORM model for the `videos` table
 │   ├── schemas.py        # Pydantic request/response models
-│   └── downloader.py     # yt-dlp download logic, progress tracking
+│   ├── downloader.py     # yt-dlp download logic, progress tracking, auto-upgrade
+│   └── ytdlp_update.py   # which packages to upgrade (+ CLI used by entrypoint.sh)
 ├── tests/                # pytest suite (httpx AsyncClient over temp SQLite)
 ├── Dockerfile            # Container image definition
 ├── docker-compose.yml    # Runs backend + PostgreSQL together
@@ -42,8 +43,11 @@ silently breaks the other.
 
 `requirements.txt` has two pins that exist purely so everything installs from a
 **wheel** (see the comments there): `asyncpg` and `pydantic` floors for Python
-3.13, below which pip builds from source and fails; and `yt-dlp-ejs` uses semver
-(`0.8.0`), not yt-dlp's date scheme — pinning it to a date breaks the image build.
+3.13, below which pip builds from source and fails. yt-dlp is installed as
+`yt-dlp[default]`, which brings `yt-dlp-ejs` at exactly the version that yt-dlp
+expects — don't list ejs separately (it's semver, `0.8.0`, not date-based).
+
+`make run` (no Docker) needs **deno ≥ 2.3.0** on PATH for the JS challenge solver.
 
 ---
 
@@ -62,7 +66,7 @@ silently breaks the other.
 | GET | `/api/channel/resolve?q=…` | Resolve a channel ID from a URL / `@handle` / username / id |
 | GET | `/api/channel/{channel_id}/videos?page_token=…` | One page (50 uploads before filtering) of a channel's videos via YouTube Data API; pass the response's `next_page_token` back as `page_token` for the next page (null = end). Each page is cached 1h per `(channel, token)`. **Shorts** are dropped using the channel's auto-generated `UUSH…` playlist (YouTube's own Shorts classification; falls back to ≤60s only if that playlist can't be read). **Members-only** videos come from the `UUMO…` playlist and are kept with `members_only: true` — `videos.list` returns them like public videos, so membership in UUMO is the only reliable signal. These system playlists are read incrementally (only as far back as the current page, plus a 30-day margin since they're not strictly date-ordered) and cached per channel; a 404 means the channel has none. Private/deleted videos (absent from `videos.list`) are dropped. Each item includes `duration` (seconds) and `live_broadcast` (`none` / `upcoming` / `live`); a **zero** duration means live/upcoming/premiere, not a Short — those stay so the client can collapse them. See `youtube_api.fetch_channel_page`. |
 | GET | `/api/yt-dlp/version` | yt-dlp version loaded in this process. |
-| GET | `/api/yt-dlp/update` | **Admin only.** pip-upgrade yt-dlp + yt-dlp-ejs and hot-reload them. |
+| GET | `/api/yt-dlp/update` | **Admin only.** pip-upgrade yt-dlp (+ matching ejs) and the PO Token plugin (pinned to the sidecar's version), then hot-reload them. |
 | GET | `/api/users` | **Admin only.** List users (incl. their tokens). |
 | POST | `/api/users` | **Admin only.** Create a user `{username, token?}` (random token if omitted). 409 on duplicate username/token. |
 | PATCH | `/api/users/{id}` | **Admin only.** Update `{username?, token?}`. The admin user cannot be renamed (400); its token can change. |
@@ -105,20 +109,43 @@ silently breaks the other.
   (including `HTTPException` failures), writing via a **fresh** session so logging
   can't interfere with the request.
 
-### Keeping yt-dlp current (`downloader.py`)
+### Keeping yt-dlp current (`downloader.py`, `ytdlp_update.py`)
 - YouTube breaks stale yt-dlp builds every few months (typically HTTP 403 on the
-  media URL, or "Sign in to confirm you're not a bot"). Two layers keep it fresh:
-  `entrypoint.sh` pip-upgrades yt-dlp + yt-dlp-ejs on **every container start**,
-  and `GET /api/yt-dlp/update` (admin) does the same on demand — a GET so it can
-  be hit from a browser or a bookmark.
+  media URL, or "Sign in to confirm you're not a bot"). Four layers keep it fresh:
+  1. `entrypoint.sh` runs `python -m app.ytdlp_update` on **every container start**.
+  2. **After a failed download**, `_download_with_auto_update()` upgrades and, if
+     that loaded new packages, **retries the download once** (the client keeps
+     polling `downloading` with a "updating yt-dlp…" message meanwhile). Rate
+     limited by `AUTO_UPDATE_COOLDOWN_MINUTES` (default 30) so a video that fails
+     for its own reasons can't run pip on every request. If another task already
+     loaded new packages since this one started, it just retries.
+  3. `periodic_update_loop()` (started in `lifespan`) upgrades every
+     `AUTO_UPDATE_INTERVAL_HOURS` (default 24).
+  4. `GET /api/yt-dlp/update` (admin) on demand — a GET so it can be hit from a
+     browser or a bookmark.
+- What gets installed is `ytdlp_update.upgrade_specs()`: `yt-dlp[default]` (so
+  ejs matches yt-dlp exactly) and `bgutil-ytdlp-pot-provider==<sidecar version>`
+  (see PO Token section — **plugin and sidecar must be the same major version**).
 - `upgrade_yt_dlp()` = `_pip_upgrade()` (stubbed in tests) then `_reload_yt_dlp()`,
-  which drops every `yt_dlp*` entry from `sys.modules`, re-imports, and rebinds
-  this module's global — so the new version applies **without a restart**. The
-  reload is skipped while a download is in flight (`downloads_in_flight()`),
-  because the running `_sync_download` still holds the old module; the response
-  then says `restart_required: true`.
+  which drops every `yt_dlp*` / `yt_dlp_ejs*` / `yt_dlp_plugins*` module from
+  `sys.modules`, re-imports, and rebinds this module's global — so the new
+  version applies **without a restart**. The reload is skipped while a download
+  is in flight (`downloads_in_flight()`; a failed task waiting on its own
+  auto-upgrade is excluded), because the running `_sync_download` still holds
+  the old module; the response then says `restart_required: true`.
 - An `_upgrade_lock` serializes concurrent calls. `GET /api/yt-dlp/version`
   reports what is actually loaded — use it to check before/after.
+
+### JS challenge runtime: deno, not bun
+- yt-dlp-ejs runs YouTube's n/sig challenge solver in a JS runtime
+  (`_JS_RUNTIMES` in `downloader.py`). The image installs **deno**
+  (`denoland/deno:bin`). It used to install bun from the floating `oven/bun:1`
+  tag, which drifted to bun 1.4.x — unsupported by yt-dlp (bun is deprecated,
+  yt-dlp#16766; last supported 1.3.14). The solver then produced wrong n values,
+  so every client that needs it (web, web_music, mweb…) 403'd and downloads only
+  worked through `android`'s 360p muxed fallback — or failed outright once the
+  PO token started working. Symptom in `yt-dlp -v`: `[jsc:bun] bun version … is
+  not supported`, or `n challenge solving failed`.
 
 ### PO Token provider (`downloader.py`, `docker-compose.yml`)
 - Separately from stale-version 403s above: YouTube now requires a **PO Token**
@@ -135,6 +162,14 @@ silently breaks the other.
   both processes share a host, which isn't true across Compose services.
   `make run`'s `pot-provider` target starts the same container locally via
   `docker run` for non-Docker dev.
+- **Plugin and sidecar versions must match** (same major at least). The
+  plugin is pip-upgraded by us, the sidecar is a Docker image we don't touch —
+  upgrading the plugin to 2.0.2 against a 1.3.1 sidecar made it refuse to fetch
+  tokens (`Plugin and HTTP server major versions are mismatched`), so web_music
+  was skipped. `ytdlp_update.upgrade_specs()` therefore asks the sidecar
+  (`GET {POT_PROVIDER_URL}/ping` → `{"version": …}`) and installs exactly that
+  plugin version (latest only if the sidecar is unreachable). Compose has
+  `pull_policy: always` on `pot-provider`, so `docker compose up` refreshes it.
 - A token alone isn't sufficient — yt-dlp's default client mix (web,
   web_safari, android_vr, ...) lists adaptive audio-only formats from clients
   whose token is scoped differently and still 403s on fetch (see
@@ -245,6 +280,8 @@ downloaded again. `tests/test_download_start.py` covers both cases.
 | `DATA_DIR` | `/data` | Directory to store audio and thumbnail files |
 | `YOUTUBE_API_KEY` | — | YouTube Data API v3 key, required for `/api/channel/{id}/videos` |
 | `POT_PROVIDER_URL` | `http://127.0.0.1:4416` | Base URL of the `bgutil-ytdlp-pot-provider` sidecar (see PO Token section above). Compose sets this to `http://pot-provider:4416`. |
+| `AUTO_UPDATE_COOLDOWN_MINUTES` | `30` | Min gap between yt-dlp upgrades triggered by a failed download. `0` disables upgrade-and-retry. |
+| `AUTO_UPDATE_INTERVAL_HOURS` | `24` | Periodic yt-dlp upgrade interval. `0` disables it. |
 
 ---
 

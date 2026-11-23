@@ -26,6 +26,7 @@ from .downloader import (
     extract_video_id,
     fetch_metadata,
     get_progress,
+    periodic_update_loop,
     progress_store,
     run_download,
     upgrade_yt_dlp,
@@ -213,7 +214,12 @@ async def lifespan(app: FastAPI):
     logger.info("Database tables ensured.")
     await ensure_columns()
     await ensure_admin()
-    yield
+    # Keeps yt-dlp current in a long-running container (see downloader.py).
+    updater = asyncio.create_task(periodic_update_loop())
+    try:
+        yield
+    finally:
+        updater.cancel()
 
 
 # ---------------------------------------------------------------------------

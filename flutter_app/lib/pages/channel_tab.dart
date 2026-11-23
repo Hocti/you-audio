@@ -374,6 +374,9 @@ class _ChannelDetailViewState extends State<_ChannelDetailView> {
   // Members-only / live / upcoming rows are hidden unless toggled on.
   bool _showHidden = false;
 
+  // The backend predates the duration / members_only fields (see ChannelPage).
+  bool _serverOutdated = false;
+
   // Title search within the channel's videos.
   bool _searching = false;
   String _searchQuery = '';
@@ -441,6 +444,7 @@ class _ChannelDetailViewState extends State<_ChannelDetailView> {
         setState(() {
           _videos = page.videos;
           _nextPageToken = page.nextPageToken;
+          _serverOutdated = page.serverOutdated;
           _channelName ??=
               page.videos.isNotEmpty ? page.videos.first.channelName : null;
           _loading = false;
@@ -774,11 +778,41 @@ class _ChannelDetailViewState extends State<_ChannelDetailView> {
           padding: const EdgeInsets.only(bottom: 8),
           itemCount: rows.length + 2,
           itemBuilder: (context, i) {
-            if (i == 0) return _buildHiddenBanner(hiddenCount);
+            if (i == 0) {
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (_serverOutdated) _buildOutdatedBanner(),
+                  _buildHiddenBanner(hiddenCount),
+                ],
+              );
+            }
             if (i == rows.length + 1) return _buildFooter(rows.isEmpty);
             return _buildVideoTile(rows[i - 1], jobs);
           },
         ),
+      ),
+    );
+  }
+
+  /// Shown when the server sends no length / members-only info: an old backend.
+  Widget _buildOutdatedBanner() {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(12, 6, 12, 2),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: scheme.errorContainer,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(
+        'Server is outdated: no video length or members-only info. '
+        'Redeploy the backend to fix this.',
+        style: Theme.of(context)
+            .textTheme
+            .bodySmall
+            ?.copyWith(color: scheme.onErrorContainer),
       ),
     );
   }

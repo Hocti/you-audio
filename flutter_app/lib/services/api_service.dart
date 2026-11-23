@@ -151,11 +151,18 @@ class ApiService {
     if (resp.statusCode == 200) {
       final body = jsonDecode(resp.body) as Map<String, dynamic>;
       final list = (body['videos'] as List<dynamic>?) ?? const <dynamic>[];
+      // A current backend always sends these keys (even when null); an old one
+      // omits them entirely.
+      final outdated = list.isNotEmpty &&
+          list.every((j) =>
+              !(j as Map).containsKey('duration') ||
+              !j.containsKey('members_only'));
       return ChannelPage(
         list
             .map((j) => ChannelVideo.fromJson(j as Map<String, dynamic>))
             .toList(),
         body['next_page_token'] as String?,
+        serverOutdated: outdated,
       );
     }
     throw Exception('getChannelVideos failed: ${resp.statusCode}');

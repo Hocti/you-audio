@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import sys
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -18,6 +19,7 @@ import yt_dlp
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from . import ytdlp_update
 from .database import async_session
 from .models import Video
 
@@ -134,10 +136,17 @@ THUMB_DIR.mkdir(parents=True, exist_ok=True)
 # metadata-only lookups.
 _POT_EXTRACTOR_ARGS = {
     "youtubepot-bgutilhttp": {
-        "base_url": [os.getenv("POT_PROVIDER_URL", "http://127.0.0.1:4416")]
+        "base_url": [ytdlp_update.POT_PROVIDER_URL]
     },
     "youtube": {"player_client": ["web_music", "android"]},
 }
+
+# JavaScript runtime yt-dlp-ejs runs YouTube's n/sig challenge solver in. Deno is
+# yt-dlp's recommended runtime; bun is deprecated (yt-dlp#16766) and bun > 1.3.14
+# is unsupported — with bun 1.4.x the solver failed and every client that needs
+# it (web, web_music, mweb, ...) 403'd, leaving only `android`. The Dockerfile
+# installs deno; for `make run`, install deno >= 2.3.0 on PATH.
+_JS_RUNTIMES: dict[str, dict] = {"deno": {}}
 
 
 # ---------------------------------------------------------------------------
@@ -163,17 +172,26 @@ def get_progress(task_id: str) -> TaskProgress | None:
 # yt-dlp self-update
 # ---------------------------------------------------------------------------
 
-# Refreshed together: yt-dlp, its JS challenge solver, and the PO Token plugin.
-_UPGRADE_PACKAGES = ["yt-dlp", "yt-dlp-ejs", "bgutil-ytdlp-pot-provider"]
-
-# pip over the network; generous but bounded so a hung index can't wedge a worker.
-_UPGRADE_TIMEOUT_SECONDS = 300
-
 # Serializes upgrades so two callers can't pip-install over each other.
 _upgrade_lock = asyncio.Lock()
 
 # Statuses that mean a download is still using the currently-loaded yt-dlp.
 _IN_FLIGHT_STATUSES = ("pending", "downloading", "converting")
+
+# Automatic upgrades (besides entrypoint.sh on every start and the admin
+# endpoint): one after a download fails, then that download is retried once;
+# and a periodic one, so a long-running container doesn't go stale.
+#   AUTO_UPDATE_COOLDOWN_MINUTES — min gap between failure-triggered upgrades,
+#     so a video that fails for its own reasons (private, region-locked, ...)
+#     can't make every request run pip. 0 disables failure-triggered upgrades.
+#   AUTO_UPDATE_INTERVAL_HOURS — periodic upgrade interval. 0 disables it.
+AUTO_UPDATE_COOLDOWN_SECONDS = float(os.getenv("AUTO_UPDATE_COOLDOWN_MINUTES", "30")) * 60
+AUTO_UPDATE_INTERVAL_SECONDS = float(os.getenv("AUTO_UPDATE_INTERVAL_HOURS", "24")) * 3600
+
+# time.monotonic() of the last failure-triggered upgrade attempt (cooldown), and
+# of the last upgrade that actually loaded new packages into this process.
+_last_auto_update_attempt: float | None = None
+_last_reload_with_changes: float | None = None
 
 
 def yt_dlp_version() -> str:
@@ -181,32 +199,35 @@ def yt_dlp_version() -> str:
     return yt_dlp.version.__version__
 
 
-def downloads_in_flight() -> bool:
-    return any(tp.status in _IN_FLIGHT_STATUSES for tp in progress_store.values())
+def downloads_in_flight(exclude: str | None = None) -> bool:
+    """True if a download (other than task `exclude`) is using yt-dlp now."""
+    return any(
+        tp.status in _IN_FLIGHT_STATUSES
+        for tid, tp in progress_store.items()
+        if tid != exclude
+    )
 
 
 async def _pip_upgrade() -> str:
     """Run pip to upgrade the yt-dlp packages; return its combined output.
 
-    Raises RuntimeError if pip fails or takes longer than
-    `_UPGRADE_TIMEOUT_SECONDS`. Split out from `upgrade_yt_dlp` so tests can
-    stub the network/pip half.
+    The package list comes from `ytdlp_update.upgrade_specs()` (yt-dlp with its
+    matching ejs, plus the PO Token plugin pinned to the sidecar's version).
+    Raises RuntimeError if pip fails or takes longer than the timeout. Split out
+    from `upgrade_yt_dlp` so tests can stub the network/pip half.
     """
+    specs = await asyncio.to_thread(ytdlp_update.upgrade_specs)
     proc = await asyncio.create_subprocess_exec(
-        sys.executable, "-m", "pip", "install", "--no-cache-dir", "--upgrade",
-        *_UPGRADE_PACKAGES,
+        *ytdlp_update.pip_command(specs),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
     )
+    timeout = ytdlp_update.PIP_TIMEOUT_SECONDS
     try:
-        raw, _ = await asyncio.wait_for(
-            proc.communicate(), timeout=_UPGRADE_TIMEOUT_SECONDS
-        )
+        raw, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except asyncio.TimeoutError:
         proc.kill()
-        raise RuntimeError(
-            f"pip install timed out after {_UPGRADE_TIMEOUT_SECONDS}s"
-        ) from None
+        raise RuntimeError(f"pip install timed out after {timeout}s") from None
 
     output = raw.decode(errors="replace").strip()
     if proc.returncode != 0:
@@ -216,49 +237,118 @@ async def _pip_upgrade() -> str:
     return output
 
 
+# Top-level packages dropped from sys.modules on reload: yt-dlp itself, its JS
+# solver, and plugins (the PO Token provider lives under `yt_dlp_plugins`).
+_RELOAD_PACKAGES = {"yt_dlp", "yt_dlp_ejs", "yt_dlp_plugins"}
+
+
 def _reload_yt_dlp() -> str:
     """Re-import yt_dlp in place so an upgrade applies without a restart.
 
-    Every `yt_dlp*` entry is dropped from `sys.modules` and the package imported
-    again, then this module's global `yt_dlp` is rebound. Callers must only do
-    this while no download is running: an in-flight `_sync_download` holds the
-    old module objects and could still lazy-import a submodule from under it.
+    Every module of `_RELOAD_PACKAGES` is dropped from `sys.modules` and yt_dlp
+    imported again, then this module's global `yt_dlp` is rebound. Callers must
+    only do this while no download is running: an in-flight `_sync_download`
+    holds the old module objects and could still lazy-import a submodule from
+    under it.
     """
     global yt_dlp
-    for name in [n for n in sys.modules if n == "yt_dlp" or n.startswith("yt_dlp.")]:
+    for name in [n for n in sys.modules if n.split(".")[0] in _RELOAD_PACKAGES]:
         del sys.modules[name]
+    importlib.invalidate_caches()
     yt_dlp = importlib.import_module("yt_dlp")
     return yt_dlp.version.__version__
 
 
-async def upgrade_yt_dlp() -> dict[str, Any]:
+async def upgrade_yt_dlp(exclude_task: str | None = None) -> dict[str, Any]:
     """Upgrade yt-dlp to the latest release and load it into this process.
 
     YouTube breaks stale yt-dlp builds every few months, so this exists to fix
     downloads without rebuilding or restarting the container. Reloading is
     skipped while a download is in flight — the new version is on disk and takes
-    effect on the next restart, reported as `restart_required`.
+    effect on the next restart (or the next upgrade that finds the server idle),
+    reported as `restart_required`. `exclude_task` lets a failed download that
+    is waiting on this upgrade not count as "in flight".
     """
+    global _last_reload_with_changes
     async with _upgrade_lock:
         before = yt_dlp_version()
         output = await _pip_upgrade()
+        changed = "Successfully installed" in output
 
-        if downloads_in_flight():
+        if downloads_in_flight(exclude=exclude_task):
             after, reloaded = before, False
             logger.info("yt-dlp upgraded on disk; reload deferred (download in flight)")
         else:
             after, reloaded = _reload_yt_dlp(), True
             logger.info("yt-dlp reloaded: %s -> %s", before, after)
+            if changed:
+                _last_reload_with_changes = time.monotonic()
 
         return {
             "previous_version": before,
             "current_version": after,
             "updated": after != before,
             "reloaded": reloaded,
+            # pip installed something (yt-dlp, ejs or the PO Token plugin).
+            "packages_changed": changed,
             # pip pulled a new build but we couldn't swap it in yet.
-            "restart_required": not reloaded and "Successfully installed" in output,
+            "restart_required": not reloaded and changed,
             "pip_output": output[-2000:],
         }
+
+
+async def _auto_update_after_failure(task_id: str, started_at: float) -> bool:
+    """Try to fix a failed download by upgrading yt-dlp; True = worth retrying.
+
+    Retrying only makes sense if this process now runs different packages than
+    the failed attempt did — either because another task already upgraded while
+    this one was downloading, or because the upgrade done here changed something.
+    """
+    global _last_auto_update_attempt
+    if AUTO_UPDATE_COOLDOWN_SECONDS <= 0:
+        return False
+    if _last_reload_with_changes is not None and _last_reload_with_changes > started_at:
+        return True
+
+    now = time.monotonic()
+    if (
+        _last_auto_update_attempt is not None
+        and now - _last_auto_update_attempt < AUTO_UPDATE_COOLDOWN_SECONDS
+    ):
+        return False
+    _last_auto_update_attempt = now
+
+    try:
+        result = await upgrade_yt_dlp(exclude_task=task_id)
+    except Exception:
+        logger.exception("Automatic yt-dlp upgrade after a failed download failed")
+        return False
+    logger.info(
+        "Automatic yt-dlp upgrade after failure: %s -> %s (changed=%s, reloaded=%s)",
+        result["previous_version"], result["current_version"],
+        result["packages_changed"], result["reloaded"],
+    )
+    return result["packages_changed"] and result["reloaded"]
+
+
+async def periodic_update_loop() -> None:
+    """Upgrade yt-dlp every AUTO_UPDATE_INTERVAL_SECONDS (run from lifespan).
+
+    The first run waits a full interval: entrypoint.sh already upgraded at start.
+    """
+    if AUTO_UPDATE_INTERVAL_SECONDS <= 0:
+        return
+    while True:
+        await asyncio.sleep(AUTO_UPDATE_INTERVAL_SECONDS)
+        try:
+            result = await upgrade_yt_dlp()
+            logger.info(
+                "Periodic yt-dlp upgrade: %s -> %s (changed=%s, reloaded=%s)",
+                result["previous_version"], result["current_version"],
+                result["packages_changed"], result["reloaded"],
+            )
+        except Exception:
+            logger.exception("Periodic yt-dlp upgrade failed")
 
 
 # ---------------------------------------------------------------------------
@@ -337,8 +427,8 @@ def _sync_download(youtube_id: str, task_id: str) -> dict[str, Any]:
         "no_warnings": True,
         "noplaylist": True,
         "overwrites": True,
-        # Use bun to solve YouTube's JS challenges (solver bundled via yt-dlp-ejs).
-        "js_runtimes": {"bun": {}},
+        # Deno solves YouTube's JS challenges (solver bundled via yt-dlp-ejs).
+        "js_runtimes": _JS_RUNTIMES,
         "extractor_args": _POT_EXTRACTOR_ARGS,
     }
 
@@ -362,7 +452,7 @@ def _sync_download(youtube_id: str, task_id: str) -> dict[str, Any]:
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
-        "js_runtimes": {"bun": {}},
+        "js_runtimes": _JS_RUNTIMES,
         "extractor_args": _POT_EXTRACTOR_ARGS,
     }
     try:
@@ -404,7 +494,7 @@ def _sync_metadata(youtube_id: str) -> dict[str, Any]:
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
-        "js_runtimes": {"bun": {}},
+        "js_runtimes": _JS_RUNTIMES,
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(
@@ -442,12 +532,37 @@ async def fetch_metadata(youtube_id: str) -> dict[str, Any]:
 # Async entry-point
 # ---------------------------------------------------------------------------
 
+async def _download_with_auto_update(youtube_id: str, task_id: str) -> dict[str, Any]:
+    """`_sync_download`, upgrading yt-dlp and retrying once if it fails.
+
+    A failure is the usual symptom of YouTube having broken the installed
+    yt-dlp (403s, "Sign in to confirm you're not a bot", missing formats), so
+    the first failure triggers an upgrade (rate-limited — see
+    `_auto_update_after_failure`); if that loaded new packages, the download is
+    retried once. The original error is re-raised when no retry happens.
+    """
+    started_at = time.monotonic()
+    try:
+        return await asyncio.to_thread(_sync_download, youtube_id, task_id)
+    except Exception as exc:
+        logger.warning("Download failed for %s (%s); checking for a yt-dlp update", youtube_id, exc)
+        tp = progress_store[task_id]
+        tp.status = "downloading"
+        tp.progress_percent = 0.0
+        tp.message = "Download failed, updating yt-dlp..."
+        if not await _auto_update_after_failure(task_id, started_at):
+            raise
+        logger.info("Retrying %s with yt-dlp %s", youtube_id, yt_dlp_version())
+        tp.message = "Retrying with updated yt-dlp..."
+    return await asyncio.to_thread(_sync_download, youtube_id, task_id)
+
+
 async def run_download(youtube_id: str, task_id: str, video_db_id: uuid.UUID) -> None:
     """Start the full download pipeline. Updates DB row when done."""
     tp = progress_store.setdefault(task_id, TaskProgress())
 
     try:
-        result = await asyncio.to_thread(_sync_download, youtube_id, task_id)
+        result = await _download_with_auto_update(youtube_id, task_id)
 
         # Download thumbnail
         thumb_path: str | None = None

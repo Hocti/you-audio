@@ -72,4 +72,20 @@ void main() {
         'dQw4w9WgXcQ');
     expect(extractYoutubeVideoId('not a url'), isNull);
   });
+
+  test('Japanese members-only tags are caught by the title heuristic', () {
+    for (final title in [
+      '【メン限】ちょっと落ち込み',
+      '【メンバーシップ限定】水着新衣装3D撮影会',
+      '【メンゲン】あまい',
+      'Members Only stream',
+    ]) {
+      final v = ChannelVideo.fromJson({'video_id': 'x', 'title': title});
+      expect(v.looksMembersOnly, isTrue, reason: title);
+      expect(v.isCollapsed, isTrue, reason: title);
+    }
+    final normal =
+        ChannelVideo.fromJson({'video_id': 'x', 'title': '【#ホロ甲2026】3年目'});
+    expect(normal.looksMembersOnly, isFalse);
+  });
 }

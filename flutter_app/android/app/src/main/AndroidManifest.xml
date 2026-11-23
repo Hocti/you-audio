@@ -61,6 +61,19 @@
             </intent-filter>
         </receiver>
 
+        <!-- Android Auto: this is a media app (browse tree + playback come from
+             the AudioService MediaBrowserService above). -->
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc" />
+
+        <!-- Serves downloaded thumbnails to Android Auto (it can't read the
+             app's private file:// paths). Read-only, thumbnails only. -->
+        <provider
+            android:name=".ThumbnailProvider"
+            android:authorities="net.teashop.you_audio.thumbs"
+            android:exported="true" />
+
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />

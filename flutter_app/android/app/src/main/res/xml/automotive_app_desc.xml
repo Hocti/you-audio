@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Declares this app as an Android Auto media app (browse + playback through
+     the audio_service MediaBrowserService). Referenced from AndroidManifest. -->
+<automotiveApp>
+    <uses name="media" />
+</automotiveApp>
